@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'maint-api',
+      name: 'maint-f-api',
       script: './src/index.js',
       cwd: '/home/germton/germton_services/maint-f-api',
       instances: 1,
