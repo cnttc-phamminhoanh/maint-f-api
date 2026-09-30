@@ -1,0 +1,42 @@
+name: Deploy MAINT API
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Update source code
+        working-directory: /home/germton/germton_services/maint-f-api
+        run: |
+          git fetch origin master
+          git reset --hard origin/master
+          git clean -fd -e .env
+
+      - name: Check Node.js
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        working-directory: /home/germton/germton_services/maint-f-api
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: /home/germton/germton_services/maint-f-api
+        run: npm run lint
+
+      - name: Restart PM2
+        working-directory: /home/germton/germton_services/maint-f-api
+        run: |
+          pm2 startOrRestart ecosystem.config.cjs --update-env
+          pm2 save
+
+      - name: Health check
+        run: |
+          sleep 2
+          curl -f http://127.0.0.1:2402/health
