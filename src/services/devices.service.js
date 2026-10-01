@@ -91,6 +91,7 @@ async function getEmpNameMap(empNos) {
 
 function toDeviceRecord(row, empNameMap, today) {
   const effectiveId = effectiveMaintainerEmpNo(row, today);
+  const maintainerId = row.maintainer_emp_no || '';
   const managerId = row.approver_emp_no || '';
   const status = effectiveStatus(
     {
@@ -109,8 +110,8 @@ function toDeviceRecord(row, empNameMap, today) {
     startDate: fmtDate(row.use_date),
     lastMaintenanceDate: fmtDate(row.max_mt_date),
     maintenanceCycle: row.maintenance_type,
-    maintainer: effectiveId
-      ? { userId: effectiveId, empNo: effectiveId, empName: empNameMap.get(effectiveId) || '' }
+    maintainer: maintainerId
+      ? { userId: maintainerId, empNo: maintainerId, empName: empNameMap.get(maintainerId) || '' }
       : null,
     manager: managerId
       ? { userId: managerId, empNo: managerId, empName: empNameMap.get(managerId) || '' }
@@ -134,6 +135,7 @@ async function enrichRecords(rows, today) {
   for (const row of rows) {
     const effective = effectiveMaintainerEmpNo(row, today);
     if (effective) empNos.push(effective);
+    if (row.maintainer_emp_no) empNos.push(row.maintainer_emp_no);
     if (row.approver_emp_no) empNos.push(row.approver_emp_no);
   }
   const map = await getEmpNameMap(empNos);
