@@ -44,9 +44,9 @@ async function withTransaction(fn) {
   } catch (err) {
     try {
       await tx.rollback();
-    } catch (_rollbackErr) {
-      console.log(_rollbackErr);
+    } catch (rollbackErr) {
       // ignore rollback failure, throw original error
+      console.log('withTransaction rollback error: ', rollbackErr);
     }
     throw err;
   }

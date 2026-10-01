@@ -51,4 +51,20 @@ router.get(
   }),
 );
 
+router.get(
+  '/delay-history',
+  validate(
+    Joi.object({
+      dept: Joi.string().allow('').default(''),
+      page: Joi.number().integer().min(1).default(1),
+      pageSize: Joi.number().integer().min(1).max(50).default(20),
+    }),
+    'query',
+  ),
+  asyncHandler(async (req, res) => {
+    const q = getQuery(req);
+    res.json(await statsService.getDelayHistory(q.dept || '', q.page, q.pageSize));
+  }),
+);
+
 module.exports = router;

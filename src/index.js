@@ -32,15 +32,16 @@ app.get('/docs.json', (req, res) => res.json(swaggerSpec));
 
 app.use('/api/auth', authRoutes);
 
-// Moi route nghiep vu bat buoc token phien (Authorization: Bearer <token>)
-// va userId trong body/query phai trung voi chu phien
+// Trang BI la cong khai (giong cloud: statistics controller khong can login)
+app.use('/api/statistics', statisticsRoutes);
+
+// Authorization: Bearer <token> va userId trong body/query phai trung voi chu phien
 app.use(requireAuth);
 app.use(assertSameUser);
 
 app.use('/api/devices', devicesRoutes);
 app.use('/api/maintenance-orders', ordersRoutes);
 app.use('/api/delayed-devices', delayedRoutes);
-app.use('/api/statistics', statisticsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -49,7 +50,6 @@ async function start() {
   try {
     await connectDb();
   } catch (err) {
-    // khong dung server khi DB chua san sang — bao loi ro de cau hinh lai .env
     console.error('[FATAL] Không kết nối được SQL Server:', err.message);
     process.exit(1);
   }

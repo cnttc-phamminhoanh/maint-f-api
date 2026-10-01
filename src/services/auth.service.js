@@ -4,7 +4,7 @@ const { ApiError } = require('../errors');
 const config = require('../config');
 const { resolveByEmpNo, toPublicUser } = require('../utils/auth');
 const { createSession, destroyUserSessions } = require('../utils/session');
-const { assertNotLocked, recordFailure, resetAttempts } = require('../utils/login-lockout');
+const { getRemainingLockMinutes, recordFailure, resetAttempts } = require('../utils/login-lockout');
 const { faceQualityCheck, faceCompare } = require('./face');
 
 // Cua so truot trong bo nho chan do mat khau dang ky
@@ -53,8 +53,8 @@ function verifyPin(pin, stored) {
 async function lookupUser(empNo) {
   if (!empNo) throw new ApiError(400, 'empNo is required');
   const row = await queryOne('SELECT * FROM emp_mnt WHERE emp_no = @e', { e: empNo });
-  if (!row) return null;
-  return { ...toPublicUser(row), registered: Boolean(row.face_image_url) };
+  if (!row) return { exists: false };
+  return { exists: true, user: toPublicUser(row) };
 }
 
 async function getUserStatus(empNo) {
@@ -111,11 +111,16 @@ async function setupPin(empNo, pin) {
 async function verifyPinLogin(empNo, pin) {
   const row = await resolveByEmpNo(empNo);
   if (!row) throw new ApiError(404, 'User not found');
-  await assertNotLocked(row.emp_no);
+  const lockMinutes = await getRemainingLockMinutes(row.emp_no);
+  if (lockMinutes > 0) {
+    return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes };
+  }
   if (!verifyPin(pin, row.pin_hash)) {
     const lock = await recordFailure(row.emp_no);
-    if (lock.locked) throw new ApiError(429, `ACCOUNT_LOCKED:${config.pinLockMinutes}`);
-    return { success: false };
+    if (lock.locked) {
+      return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes: config.pinLockMinutes };
+    }
+    return { success: false, errorCode: 'WRONG_PIN', remainingAttempts: lock.remaining };
   }
   await resetAttempts(row.emp_no);
   const session = await createSession(row.emp_no);
@@ -126,14 +131,18 @@ async function verifyPinLogin(empNo, pin) {
     userId: row.id,
     empNo: row.emp_no,
     empName: row.emp_name,
+    position: row.position || '',
+    avatarUrl: row.avatar_url || '',
   };
 }
 
 async function changePin(empNo, currentPin, newPin) {
   const row = await resolveByEmpNo(empNo);
   if (!row) throw new ApiError(404, 'User not found');
-  if (!row.pin_hash) throw new ApiError(400, 'PIN not set');
-  if (!verifyPin(currentPin, row.pin_hash)) throw new ApiError(400, 'WRONG_CURRENT_PIN');
+  if (!row.pin_hash) return { success: false, errorCode: 'PIN_NOT_SET' };
+  if (!verifyPin(currentPin, row.pin_hash)) {
+    return { success: false, errorCode: 'WRONG_CURRENT_PIN' };
+  }
   await query('UPDATE emp_mnt SET pin_hash = @p WHERE id = @id', {
     p: hashPin(newPin),
     id: row.id,
@@ -145,38 +154,46 @@ async function changePin(empNo, currentPin, newPin) {
 
 async function checkRegisterAccess(password) {
   assertRegisterNotBruteForced();
+  if (!config.registerPassword) return { ok: false };
   if (password !== config.registerPassword) {
-    throw new ApiError(403, 'Invalid access password');
+    return { ok: false };
   }
-  return { access: true };
+  return { ok: true };
 }
 
 async function registerFace(empNo, imageUrl, relaxClose) {
   const row = await resolveByEmpNo(empNo);
   if (!row) throw new ApiError(404, 'User not found');
   if (row.face_image_url && !relaxClose) {
-    throw new ApiError(400, 'FACE_ALREADY_REGISTERED');
+    return { success: false, message: 'FACE_ALREADY_REGISTERED' };
   }
   const issues = await faceQualityCheck(imageUrl);
-  if (issues.length > 0) throw new ApiError(400, `FACE_QUALITY_ISSUES:${issues.join(',')}`);
+  if (issues.length > 0) {
+    return { success: false, message: 'FACE_QUALITY_FAILED', issues };
+  }
   await query('UPDATE emp_mnt SET face_image_url = @u WHERE id = @id', {
     u: imageUrl,
     id: row.id,
   });
-  return { success: true, faceImageUrl: imageUrl };
+  return { success: true };
 }
 
 async function verifyFace(empNo, imageUrl) {
   const row = await resolveByEmpNo(empNo);
   if (!row) throw new ApiError(404, 'User not found');
-  if (!row.face_image_url) throw new ApiError(400, 'FACE_NOT_REGISTERED');
-  await assertNotLocked(row.emp_no);
+  if (!row.face_image_url) return { success: false, message: 'FACE_NOT_REGISTERED' };
+  const lockMinutes = await getRemainingLockMinutes(row.emp_no);
+  if (lockMinutes > 0) {
+    return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes };
+  }
   try {
     const matched = await faceCompare(imageUrl, row.face_image_url);
     if (!matched) {
       const lock = await recordFailure(row.emp_no);
-      if (lock.locked) throw new ApiError(429, `ACCOUNT_LOCKED:${config.pinLockMinutes}`);
-      return { success: false };
+      if (lock.locked) {
+        return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes: config.pinLockMinutes };
+      }
+      return { success: false, message: 'FACE_MISMATCH' };
     }
     await resetAttempts(row.emp_no);
     const session = await createSession(row.emp_no);
@@ -187,6 +204,8 @@ async function verifyFace(empNo, imageUrl) {
       userId: row.id,
       empNo: row.emp_no,
       empName: row.emp_name,
+      position: row.position || '',
+      avatarUrl: row.avatar_url || '',
     };
   } catch (err) {
     if (err instanceof ApiError) throw err;

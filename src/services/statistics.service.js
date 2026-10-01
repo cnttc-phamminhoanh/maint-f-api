@@ -6,7 +6,7 @@ const {
   addDays,
   effectiveStatus,
 } = require('../utils/dates');
-const { queryList } = require('./delayed.service');
+const { queryList, buildDeptHistory, buildDeptTrend, getDelayHistory } = require('./delayed.service');
 
 const ALL_STATUSES = [
   'needs_maintenance',
@@ -72,7 +72,9 @@ async function getOverview() {
   const statusCounts = ALL_STATUSES.map((status) => ({ status, count: statusMap.get(status) || 0 }));
   const cycleCounts = ALL_CYCLES.map((cycle) => ({ cycle, count: cycleMap.get(cycle) || 0 }));
 
-  const delayedReasonRows = await query('SELECT reason, COUNT(*) AS count FROM eqm_mnt_delay GROUP BY reason');
+  const delayedReasonRows = await query(
+    'SELECT reason, COUNT(*) AS count FROM eqm_mnt_delay WHERE resolved_at IS NULL GROUP BY reason',
+  );
   const delayedByReason = ALL_REASONS.map((reason) => ({
     reason,
     count: (delayedReasonRows.find((r) => r.reason === reason) || {}).count || 0,
@@ -80,7 +82,7 @@ async function getOverview() {
   const delayedTotal = delayedByReason.reduce((sum, r) => sum + r.count, 0);
 
   const delayedDeptRows = await query(
-    'SELECT mnt_dept_no AS dept, COUNT(*) AS count FROM eqm_mnt_delay GROUP BY mnt_dept_no',
+    'SELECT mnt_dept_no AS dept, COUNT(*) AS count FROM eqm_mnt_delay WHERE resolved_at IS NULL GROUP BY mnt_dept_no',
   );
   const deptDelayedMap = new Map();
   for (const r of delayedDeptRows) {
@@ -138,6 +140,37 @@ async function getOverview() {
   const lastRows = await query('SELECT MAX(snapshot_at) AS last FROM eqm_mnt_delay');
   const lastSyncedAt = lastRows[0] && lastRows[0].last ? new Date(lastRows[0].last).toISOString() : null;
 
+  const episodeTotalRows = await query('SELECT COUNT(*) AS cnt FROM eqm_mnt_delay');
+  const delayedHistoryTotal = episodeTotalRows[0] ? episodeTotalRows[0].cnt : 0;
+  const deptDelayHistory = await buildDeptHistory();
+  const deptDelayTrend = await buildDeptTrend();
+
+  const cycleStatsRows = await query(
+    `SELECT mnt_dept_no AS dept, maintenance_type AS mtype, COUNT(*) AS cnt
+     FROM eqm_mnt_delay GROUP BY mnt_dept_no, maintenance_type`,
+  );
+  const cycleStatsMap = new Map();
+  for (const r of cycleStatsRows) {
+    const key = r.dept || '';
+    if (!cycleStatsMap.has(key)) {
+      cycleStatsMap.set(key, {
+        departmentCode: key,
+        departmentName: key,
+        total: 0,
+        cycleCounts: { '1_week': 0, '2_weeks': 0, '1_month': 0, '1_year': 0 },
+      });
+    }
+    const entry = cycleStatsMap.get(key);
+    entry.total += Number(r.cnt);
+    if (Object.prototype.hasOwnProperty.call(entry.cycleCounts, r.mtype)) {
+      entry.cycleCounts[r.mtype] += Number(r.cnt);
+    }
+  }
+  for (const entry of cycleStatsMap.values()) {
+    entry.departmentName = deptNameMap.get(entry.departmentCode) || entry.departmentCode;
+  }
+  const deptDelayCycleStats = [...cycleStatsMap.values()].sort((a, b) => b.total - a.total);
+
   return {
     totalDevices: rows.length,
     completedToday,
@@ -146,6 +179,10 @@ async function getOverview() {
     departmentCounts,
     delayedTotal,
     delayedByReason,
+    delayedHistoryTotal,
+    deptDelayHistory,
+    deptDelayTrend,
+    deptDelayCycleStats,
     lastSyncedAt,
     departmentDueStats,
     cycleMaintStats,
@@ -269,4 +306,4 @@ async function getEquipmentStatistics(params) {
   return { items, total, page: params.page, pageSize: params.pageSize, factories, maintTypes, empOptions, respOptions };
 }
 
-module.exports = { getOverview, getDelayedStatistics, getEquipmentStatistics };
+module.exports = { getOverview, getDelayedStatistics, getEquipmentStatistics, getDelayHistory };

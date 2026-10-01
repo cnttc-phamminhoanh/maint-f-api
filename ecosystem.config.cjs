@@ -11,7 +11,12 @@ module.exports = {
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production'
-      }
+      },
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: '/home/germton/.pm2/logs/maint-f-api-error.log',
+      out_file: '/home/germton/.pm2/logs/maint-f-api-out.log',
+      merge_logs: true,
     }
   ]
 };

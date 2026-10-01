@@ -1,10 +1,4 @@
-const {
-  query,
-  queryOne,
-  withTransaction,
-  txQuery,
-  inClause,
-} = require('../db');
+const { query, queryOne, withTransaction, txQuery, inClause } = require('../db');
 const { ApiError } = require('../errors');
 const config = require('../config');
 const {
@@ -23,10 +17,7 @@ const {
   isTempActive,
   effectiveMaintainerEmpNo,
 } = require('../utils/dates');
-const {
-  resolveSelectedTemplates,
-  cycleToMtFlag,
-} = require('./maintenance-order.service');
+const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order.service');
 
 // bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1)
 const NEXT_DUE_SQL = `CAST(CASE
@@ -55,20 +46,10 @@ const EMPTY_COUNTS = {
   cycleCounts: { all: 0, '1_week': 0, '2_weeks': 0, '1_month': 0, '1_year': 0 },
 };
 
-const STATUS_ENUM = [
-  'needs_maintenance',
-  'in_maintenance',
-  'pending_approval',
-  'not_due',
-];
+const STATUS_ENUM = ['needs_maintenance', 'in_maintenance', 'pending_approval', 'not_due'];
 
 // Vi tri duoc thay dong "Nguoi phu trach" tren card (giong cloud FE)
-const SHOW_MAINTAINER_POSITIONS = [
-  'admin',
-  'chu_quan',
-  'nhan_vien_bao_tri',
-  'van_thu',
-];
+const SHOW_MAINTAINER_POSITIONS = ['admin', 'chu_quan', 'nhan_vien_bao_tri', 'van_thu'];
 // Vi tri co trang chu la danh sach thiet bi phong ban (FE luon goi scope=department)
 const DEPT_HOME_POSITIONS = ['nhan_vien_bao_tri', 'chu_quan', 'van_thu'];
 
@@ -120,11 +101,7 @@ function toDeviceRecord(row, empNameMap, today) {
     },
     today,
   );
-  const showMaintenanceBy = [
-    'in_maintenance',
-    'pending_approval',
-    'rejected',
-  ].includes(status);
+  const showMaintenanceBy = ['in_maintenance', 'pending_approval', 'rejected'].includes(status);
   return {
     id: row.id,
     code: row.equ_no,
@@ -133,28 +110,16 @@ function toDeviceRecord(row, empNameMap, today) {
     lastMaintenanceDate: fmtDate(row.max_mt_date),
     maintenanceCycle: row.maintenance_type,
     maintainer: effectiveId
-      ? {
-        userId: effectiveId,
-        empNo: effectiveId,
-        empName: empNameMap.get(effectiveId) || '',
-      }
+      ? { userId: effectiveId, empNo: effectiveId, empName: empNameMap.get(effectiveId) || '' }
       : null,
     manager: managerId
-      ? {
-        userId: managerId,
-        empNo: managerId,
-        empName: empNameMap.get(managerId) || '',
-      }
+      ? { userId: managerId, empNo: managerId, empName: empNameMap.get(managerId) || '' }
       : null,
     requestedAt: toIso(row.completion_requested_at),
     maintenanceStatus: status,
     maintenanceBy:
       showMaintenanceBy && effectiveId
-        ? {
-          userId: effectiveId,
-          empNo: effectiveId,
-          empName: empNameMap.get(effectiveId) || '',
-        }
+        ? { userId: effectiveId, empNo: effectiveId, empName: empNameMap.get(effectiveId) || '' }
         : null,
     isTemporaryHandover: isTempActive(row, today),
     rejectionReason: row.rejection_reason || '',
@@ -178,13 +143,8 @@ async function enrichRecords(rows, today) {
 function assertCanMaintain(caller, row, today) {
   if (caller.position === 'admin') return;
   const isMaintainer = effectiveMaintainerEmpNo(row, today) === caller.empNo;
-  const sameDept =
-    caller.departmentId !== null && row.mnt_dept_no === caller.departmentId;
-  if (
-    (MAINTAINER_POSITIONS.includes(caller.position) ||
-      caller.position === 'van_thu') &&
-    sameDept
-  ) {
+  const sameDept = caller.departmentId !== null && row.mnt_dept_no === caller.departmentId;
+  if ((MAINTAINER_POSITIONS.includes(caller.position) || caller.position === 'van_thu') && sameDept) {
     return;
   }
   if (isMaintainer) return;
@@ -193,9 +153,7 @@ function assertCanMaintain(caller, row, today) {
 
 async function getDeviceRow(id) {
   if (!/^\d+$/.test(String(id))) return null;
-  return queryOne(`SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.id = @id`, {
-    id,
-  });
+  return queryOne(`SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.id = @id`, { id });
 }
 
 async function getDeviceById(id) {
@@ -229,9 +187,7 @@ function buildScopeCondition(params, caller, values, _today) {
     return [];
   case 'approver':
     values.callerEmpNo = caller.empNo;
-    return [
-      'd.maintenance_status = \'pending_approval\' AND d.approver_emp_no = @callerEmpNo',
-    ];
+    return ['d.maintenance_status = \'pending_approval\' AND d.approver_emp_no = @callerEmpNo'];
   case 'chu_quan':
   case 'van_thu': {
     const parts = [];
@@ -241,9 +197,7 @@ function buildScopeCondition(params, caller, values, _today) {
     }
     values.callerEmpNo = caller.empNo;
     parts.push('d.maintainer_emp_no = @callerEmpNo');
-    parts.push(
-      '(d.temp_maintainer_emp_no = @callerEmpNo AND d.temp_maintainer_date = @today)',
-    );
+    parts.push('(d.temp_maintainer_emp_no = @callerEmpNo AND d.temp_maintainer_date = @today)');
     return [`(${parts.join(' OR ')})`];
   }
   case 'nhan_vien_bao_tri':
@@ -292,9 +246,7 @@ async function listDevices(params) {
     cond.push(`(${parts.join(' OR ')})`);
   }
 
-  const joinSql = needJoin
-    ? 'LEFT JOIN emp_mnt m2 ON m2.emp_no = d.maintainer_emp_no'
-    : '';
+  const joinSql = needJoin ? 'LEFT JOIN emp_mnt m2 ON m2.emp_no = d.maintainer_emp_no' : '';
   const baseWhere = cond.length > 0 ? `WHERE ${cond.join(' AND ')}` : '';
 
   // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
@@ -331,13 +283,10 @@ async function listDevices(params) {
   if (params.due && params.due !== 'all') {
     if (params.due === 'overdue') finalCond.push(`${NEXT_DUE_SQL} < @today`);
     else if (params.due === 'today') finalCond.push(`${NEXT_DUE_SQL} = @today`);
-    else if (params.due === 'tomorrow')
-      finalCond.push(`${NEXT_DUE_SQL} = @tomorrow`);
-    else if (params.due === 'later')
-      finalCond.push(`${NEXT_DUE_SQL} > @tomorrow`);
+    else if (params.due === 'tomorrow') finalCond.push(`${NEXT_DUE_SQL} = @tomorrow`);
+    else if (params.due === 'later') finalCond.push(`${NEXT_DUE_SQL} > @tomorrow`);
   }
-  const finalWhere =
-    finalCond.length > 0 ? `WHERE ${finalCond.join(' AND ')}` : '';
+  const finalWhere = finalCond.length > 0 ? `WHERE ${finalCond.join(' AND ')}` : '';
 
   const totalRows = await query(
     `SELECT COUNT(*) AS total FROM eqm_mnt d ${joinSql} ${finalWhere}`,
@@ -364,13 +313,7 @@ async function listDevices(params) {
     total,
     page: params.page,
     pageSize: params.pageSize,
-    dueCounts: {
-      all: c.total,
-      overdue: c.overdue,
-      today: c.dueToday,
-      tomorrow: c.dueTomorrow,
-      later: c.dueLater,
-    },
+    dueCounts: { all: c.total, overdue: c.overdue, today: c.dueToday, tomorrow: c.dueTomorrow, later: c.dueLater },
     statusCounts: {
       all: c.total,
       needs_maintenance: c.stNeeds,
@@ -379,13 +322,7 @@ async function listDevices(params) {
       rejected: c.stRejected,
       not_due: c.stNotDue,
     },
-    cycleCounts: {
-      all: c.total,
-      '1_week': c.cy1w,
-      '2_weeks': c.cy2w,
-      '1_month': c.cy1m,
-      '1_year': c.cy1y,
-    },
+    cycleCounts: { all: c.total, '1_week': c.cy1w, '2_weeks': c.cy2w, '1_month': c.cy1m, '1_year': c.cy1y },
   };
 }
 
@@ -393,17 +330,11 @@ async function listDevices(params) {
 
 async function lookupDeviceByQr(qr, userId) {
   // chi khop chinh xac ma thiet bi - khong co bat ky su sua loi nao
-  const row = await queryOne(
-    `SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.equ_no = @qr`,
-    { qr },
-  );
+  const row = await queryOne(`SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.equ_no = @qr`, { qr });
   if (!row) throw new ApiError(404, 'DEVICE_NOT_FOUND');
   if (userId) {
     const caller = await getCaller(userId);
-    if (
-      caller.position !== 'admin' &&
-      row.mnt_dept_no !== caller.departmentId
-    ) {
+    if (caller.position !== 'admin' && row.mnt_dept_no !== caller.departmentId) {
       throw new ApiError(403, 'CROSS_DEPT_DEVICE');
     }
   }
@@ -419,10 +350,7 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
   const where = 'WHERE d.approver_emp_no = @empNo';
   const values = { empNo: caller.empNo };
 
-  const totalRows = await query(
-    `SELECT COUNT(*) AS total FROM eqm_mnt d ${where}`,
-    values,
-  );
+  const totalRows = await query(`SELECT COUNT(*) AS total FROM eqm_mnt d ${where}`, values);
   const total = totalRows[0] ? totalRows[0].total : 0;
 
   const orderSql =
@@ -455,23 +383,12 @@ async function listFactories(userId) {
   const byFactory = new Map();
   for (const row of rows) {
     if (row.equ_addr && !byFactory.has(row.equ_addr)) {
-      byFactory.set(row.equ_addr, {
-        id: row.id,
-        empNo: row.emp_no,
-        empName: row.emp_name,
-      });
+      byFactory.set(row.equ_addr, { id: row.id, empNo: row.emp_no, empName: row.emp_name });
     }
   }
   const items = [];
   for (const [factory, approver] of byFactory) {
-    items.push({
-      factory,
-      approver: {
-        userId: approver.id,
-        empNo: approver.empNo,
-        empName: approver.empName,
-      },
-    });
+    items.push({ factory, approver: { userId: approver.id, empNo: approver.empNo, empName: approver.empName } });
   }
   return { items };
 }
@@ -494,14 +411,7 @@ async function listMaintainerCandidates(userId) {
     `SELECT id, emp_no, emp_name, position FROM emp_mnt ${where} ORDER BY emp_name ASC`,
     values,
   );
-  return {
-    items: rows.map((r) => ({
-      userId: r.id,
-      empNo: r.emp_no,
-      empName: r.emp_name,
-      position: r.position,
-    })),
-  };
+  return { items: rows.map((r) => ({ userId: r.id, empNo: r.emp_no, empName: r.emp_name, position: r.position })) };
 }
 
 // ==== Cap nhat trang thai ====
@@ -513,10 +423,7 @@ async function updateDeviceStatus(id, status, userId) {
   if (!row) throw new ApiError(404, 'Device not found');
   const today = businessToday();
   assertCanMaintain(caller, row, today);
-  if (
-    row.maintenance_status === 'pending_approval' &&
-    status !== 'pending_approval'
-  ) {
+  if (row.maintenance_status === 'pending_approval' && status !== 'pending_approval') {
     throw new ApiError(400, 'device is pending approval');
   }
   if (
@@ -536,10 +443,7 @@ async function updateDeviceStatus(id, status, userId) {
     effectiveMaintainerEmpNo(row, today) !== caller.empNo &&
     caller.position !== 'admin'
   ) {
-    set.push(
-      'temp_maintainer_emp_no = @tempEmp',
-      'temp_maintainer_date = @tempDate',
-    );
+    set.push('temp_maintainer_emp_no = @tempEmp', 'temp_maintainer_date = @tempDate');
     values.tempEmp = caller.empNo;
     values.tempDate = today;
   }
@@ -558,25 +462,19 @@ function parsePending(raw) {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return Array.isArray(parsed) ? parsed : [];
-  } catch (_err) {
-    console.log(_err);
+  } catch (err) {
+    console.log('parsePending error: ', err);
     return [];
   }
 }
 
 async function generateSheetNo(tx, today) {
   // FIX #4: truy van truc tiep tien to ngay hom nay (ban cu chi lay 1000 dong khong thu tu)
-  const [yy, mm, dd] = today
-    .split('-')
-    .map((part, i) => (i === 0 ? part.slice(-2) : part));
+  const [yy, mm, dd] = today.split('-').map((part, i) => (i === 0 ? part.slice(-2) : part));
   const prefix = `EMGI${yy}${mm}${dd}`;
-  const rows = await txQuery(
-    tx,
-    'SELECT sheet_no FROM eqm_mt1 WHERE sheet_no LIKE @pfx',
-    {
-      pfx: `${prefix}%`,
-    },
-  );
+  const rows = await txQuery(tx, 'SELECT sheet_no FROM eqm_mt1 WHERE sheet_no LIKE @pfx', {
+    pfx: `${prefix}%`,
+  });
   let maxSeq = 0;
   for (const row of rows) {
     const suffix = String(row.sheet_no).slice(prefix.length);
@@ -593,10 +491,7 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
   const pending = parsePending(row.pending_maintenance_items);
   if (pending.length === 0) return null;
   const sheetNo = await generateSheetNo(tx, today);
-  const maintainerEmpNo = (effectiveMaintainerEmpNo(row, today) || '').slice(
-    0,
-    20,
-  );
+  const maintainerEmpNo = (effectiveMaintainerEmpNo(row, today) || '').slice(0, 20);
   const sheetDate = row.completion_requested_at || new Date();
   await txQuery(
     tx,
@@ -636,14 +531,8 @@ async function submitApproval(id, userId, itemIds) {
   if (!row) throw new ApiError(404, 'Device not found');
   const today = businessToday();
   assertCanMaintain(caller, row, today);
-  if (
-    row.maintenance_status !== 'in_maintenance' &&
-    row.maintenance_status !== 'rejected'
-  ) {
-    throw new ApiError(
-      400,
-      'Device must be in maintenance or rejected to request approval',
-    );
+  if (row.maintenance_status !== 'in_maintenance' && row.maintenance_status !== 'rejected') {
+    throw new ApiError(400, 'Device must be in maintenance or rejected to request approval');
   }
 
   let pendingItems = parsePending(row.pending_maintenance_items);
@@ -666,10 +555,7 @@ async function submitApproval(id, userId, itemIds) {
       itemIds,
     );
     if (pendingItems.length === 0) {
-      throw new ApiError(
-        400,
-        'Không tìm thấy hạng mục đã chọn cho loại thiết bị này',
-      );
+      throw new ApiError(400, 'Không tìm thấy hạng mục đã chọn cho loại thiết bị này');
     }
   } else if (itemIds && itemIds.length > 0 && row.equ_type) {
     // rejected: cho phep chon lai hang muc truoc khi gui lai
@@ -687,27 +573,18 @@ async function submitApproval(id, userId, itemIds) {
     );
   }
 
-  const set = [
-    'pending_maintenance_items = @pending',
-    'rejection_reason = NULL',
-  ];
+  const set = ['pending_maintenance_items = @pending', 'rejection_reason = NULL'];
   const values = { id, pending: JSON.stringify(pendingItems) };
   if (
     row.maintenance_status === 'in_maintenance' &&
     effectiveMaintainerEmpNo(row, today) !== caller.empNo &&
     caller.position !== 'admin'
   ) {
-    set.push(
-      'temp_maintainer_emp_no = @tempEmp',
-      'temp_maintainer_date = @tempDate',
-    );
+    set.push('temp_maintainer_emp_no = @tempEmp', 'temp_maintainer_date = @tempDate');
     values.tempEmp = caller.empNo;
     values.tempDate = today;
   }
-  set.push(
-    'maintenance_status = \'pending_approval\'',
-    'completion_requested_at = GETDATE()',
-  );
+  set.push('maintenance_status = \'pending_approval\'', 'completion_requested_at = GETDATE()');
   const updated = await query(
     `UPDATE eqm_mnt SET ${set.join(', ')}${touchSuffix()} OUTPUT inserted.id WHERE id = @id`,
     values,
@@ -723,8 +600,7 @@ async function approveCompletion(id, userId) {
   if (!row) throw new ApiError(404, 'Device not found');
   const today = businessToday();
   const isOwner = row.approver_emp_no === requester.emp_no;
-  const isMaintainer =
-    effectiveMaintainerEmpNo(row, today) === requester.emp_no;
+  const isMaintainer = effectiveMaintainerEmpNo(row, today) === requester.emp_no;
   if (!isOwner && !isMaintainer) throw new ApiError(403, 'not allowed');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
@@ -749,8 +625,7 @@ async function rejectCompletion(id, userId, reason) {
   if (!requester) throw new ApiError(404, 'User not found');
   const row = await getDeviceRow(id);
   if (!row) throw new ApiError(404, 'Device not found');
-  if (row.approver_emp_no !== requester.emp_no)
-    throw new ApiError(403, 'not owner');
+  if (row.approver_emp_no !== requester.emp_no) throw new ApiError(403, 'not owner');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -781,10 +656,7 @@ async function bulkApproveCompletion(ids, userId) {
     for (const row of rows) {
       await finalizePendingOrder(tx, row, requester.emp_no, today);
     }
-    const { sql: upIn, params: upParams } = inClause(
-      rows.map((r) => r.id),
-      'u',
-    );
+    const { sql: upIn, params: upParams } = inClause(rows.map((r) => r.id), 'u');
     await txQuery(
       tx,
       `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @today,
@@ -832,8 +704,7 @@ async function transferFactory(id, body, userId) {
     { f: body.targetFactory },
   );
   const approver = approvers[0];
-  if (!approver)
-    throw new ApiError(400, 'No approver assigned to this factory');
+  if (!approver) throw new ApiError(400, 'No approver assigned to this factory');
 
   let maintainerTarget = null;
   if (body.newMaintainerId) {
@@ -842,16 +713,10 @@ async function transferFactory(id, body, userId) {
     if (!MAINTAINER_POSITIONS.includes(target.position)) {
       throw new ApiError(400, 'Invalid maintainer');
     }
-    if (
-      caller.position !== 'admin' &&
-      target.mnt_dept_no !== caller.departmentId
-    ) {
+    if (caller.position !== 'admin' && target.mnt_dept_no !== caller.departmentId) {
       throw new ApiError(403, 'Maintainer outside caller department');
     }
-    maintainerTarget = {
-      empNo: target.emp_no,
-      departmentId: target.mnt_dept_no || null,
-    };
+    maintainerTarget = { empNo: target.emp_no, departmentId: target.mnt_dept_no || null };
   }
 
   const set = ['approver_emp_no = @approver', 'equ_addr = @factory'];
@@ -881,10 +746,7 @@ async function undoMaintenance(id, userId) {
   const caller = await getCaller(userId);
   const row = await getDeviceRow(id);
   if (!row) throw new ApiError(404, 'Device not found');
-  if (
-    row.maintenance_status !== 'in_maintenance' &&
-    row.maintenance_status !== 'rejected'
-  ) {
+  if (row.maintenance_status !== 'in_maintenance' && row.maintenance_status !== 'rejected') {
     throw new ApiError(400, 'Device is not in maintenance or rejected');
   }
   const today = businessToday();
@@ -894,18 +756,14 @@ async function undoMaintenance(id, userId) {
     !!caller.departmentId &&
     row.mnt_dept_no === caller.departmentId;
   if (caller.empNo !== scannerId && !isDeptManager) {
-    throw new ApiError(
-      403,
-      'Only the maintenance staff or department manager can undo',
-    );
+    throw new ApiError(403, 'Only the maintenance staff or department manager can undo');
   }
   const nextDue = getNextDueDay({
     startDate: row.use_date,
     lastMaintenanceDate: row.max_mt_date,
     maintenanceCycle: row.maintenance_type,
   });
-  const newStatus =
-    nextDue && nextDue <= today ? 'needs_maintenance' : 'not_due';
+  const newStatus = nextDue && nextDue <= today ? 'needs_maintenance' : 'not_due';
   const updated = await query(
     `UPDATE eqm_mnt SET maintenance_status = @status,
       temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL,

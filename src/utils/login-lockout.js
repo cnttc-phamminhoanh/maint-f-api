@@ -21,11 +21,19 @@ async function upsertLock(empNo, failCount, lockedUntil) {
 
 // Goi TRUOC khi xac thuc PIN / khuon mat
 async function assertNotLocked(empNo) {
-  const lock = await getLock(empNo);
-  if (lock && lock.locked_until && new Date(lock.locked_until).getTime() > Date.now()) {
-    const minutes = Math.ceil((new Date(lock.locked_until).getTime() - Date.now()) / 60000);
+  const minutes = await getRemainingLockMinutes(empNo);
+  if (minutes > 0) {
     throw new ApiError(429, `ACCOUNT_LOCKED:${minutes}`);
   }
+}
+
+// So phut con lai cua lan khoa (0 = khong bi khoa)
+async function getRemainingLockMinutes(empNo) {
+  const lock = await getLock(empNo);
+  if (lock && lock.locked_until && new Date(lock.locked_until).getTime() > Date.now()) {
+    return Math.ceil((new Date(lock.locked_until).getTime() - Date.now()) / 60000);
+  }
+  return 0;
 }
 
 // Dang nhap that bai (PIN sai / khuon mat khong khop)
@@ -37,7 +45,10 @@ async function recordFailure(empNo) {
       ? new Date(Date.now() + config.pinLockMinutes * 60000)
       : null;
   await upsertLock(empNo, lockedUntil ? 0 : count, lockedUntil);
-  return { locked: Boolean(lockedUntil) };
+  return {
+    locked: Boolean(lockedUntil),
+    remaining: lockedUntil ? 0 : Math.max(0, config.pinMaxAttempts - count),
+  };
 }
 
 // Dang nhap thanh cong
@@ -51,4 +62,4 @@ async function resetAttempts(empNo) {
   );
 }
 
-module.exports = { assertNotLocked, recordFailure, resetAttempts };
+module.exports = { assertNotLocked, getRemainingLockMinutes, recordFailure, resetAttempts };

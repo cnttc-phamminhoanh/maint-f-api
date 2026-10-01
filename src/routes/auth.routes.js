@@ -44,7 +44,7 @@ router.post(
   }),
 );
 
-router.post(
+router.patch(
   '/user/profile',
   requireAuth,
   validate(
@@ -114,11 +114,12 @@ router.post(
   }),
 );
 
-router.post(
+router.get(
   '/register-access',
-  validate(Joi.object({ password: Joi.string().min(1).max(200).required() })),
+  validate(Joi.object({ password: Joi.string().min(1).max(200).required() }), 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await authService.checkRegisterAccess(req.body.password));
+    const q = getQuery(req);
+    res.json(await authService.checkRegisterAccess(q.password));
   }),
 );
 
