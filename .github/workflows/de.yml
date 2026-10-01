@@ -39,4 +39,4 @@ jobs:
       - name: Health check
         run: |
           sleep 2
-          curl -f http://127.0.0.1:2402/health
+          curl -f https://api.germhub.dpdns.org/health
