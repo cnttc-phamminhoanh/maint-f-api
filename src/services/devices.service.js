@@ -411,7 +411,7 @@ async function listMaintainerCandidates(userId) {
     `SELECT id, emp_no, emp_name, position FROM emp_mnt ${where} ORDER BY emp_name ASC`,
     values,
   );
-  return { items: rows.map((r) => ({ userId: r.id, empNo: r.emp_no, empName: r.emp_name, position: r.position })) };
+  return { items: rows.map((r) => ({ userId: r.emp_no, empNo: r.emp_no, empName: r.emp_name, position: r.position })) };
 }
 
 // ==== Cap nhat trang thai ====
@@ -462,8 +462,7 @@ function parsePending(raw) {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.log('parsePending error: ', err);
+  } catch {
     return [];
   }
 }

@@ -16,21 +16,21 @@ async function resolveByEmpNo(empNo) {
   return queryOne('SELECT * FROM emp_mnt WHERE emp_no = @e', { e: String(empNo) });
 }
 
-// Route nghiep vu: chap nhan id so (uu tien), MNV, hoac lark_user_id (uuid cu)
+// Route nghiep vu: chap nhan MNV (uu tien), id so, hoac lark_user_id (uuid cu)
 async function resolveUser(userId) {
   if (!userId) return null;
   const id = String(userId);
   if (UUID_RE.test(id)) {
     return queryOne('SELECT * FROM emp_mnt WHERE lark_user_id = @u', { u: id });
   }
-  const byId = await queryOne('SELECT * FROM emp_mnt WHERE id = @id', { id });
-  if (byId) return byId;
-  return queryOne('SELECT * FROM emp_mnt WHERE emp_no = @e', { e: id });
+  const byEmpNo = await queryOne('SELECT * FROM emp_mnt WHERE emp_no = @e', { e: id });
+  if (byEmpNo) return byEmpNo;
+  return queryOne('SELECT * FROM emp_mnt WHERE id = @id', { id });
 }
 
 function toPublicUser(row) {
   return {
-    userId: row.id,
+    userId: row.emp_no,
     empNo: row.emp_no,
     empName: row.emp_name || row.emp_no,
     position: row.position || '',
@@ -41,7 +41,7 @@ function toPublicUser(row) {
 }
 
 function toUser(row) {
-  return { userId: row.id, empNo: row.emp_no, empName: row.emp_name };
+  return { userId: row.emp_no, empNo: row.emp_no, empName: row.emp_name };
 }
 
 // Nguoi goi da xac thuc (bat buoc co userId hop le)

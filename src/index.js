@@ -38,7 +38,6 @@ app.use('/api/statistics', statisticsRoutes);
 // Authorization: Bearer <token> va userId trong body/query phai trung voi chu phien
 app.use(requireAuth);
 app.use(assertSameUser);
-
 app.use('/api/devices', devicesRoutes);
 app.use('/api/maintenance-orders', ordersRoutes);
 app.use('/api/delayed-devices', delayedRoutes);

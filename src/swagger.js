@@ -45,17 +45,17 @@ const spec = {
     title: 'API Quản lý Bảo dưỡng Thiết bị',
     version: '1.0.0',
     description: [
-      'Bộ API standalone (Express + SQL Server + Joi) tương thích hoàn toàn với frontend hiện tại.',
+      'Bộ API standalone',
       '',
       '- Đường dẫn, phương thức, tên tham số và cấu trúc JSON giữ nguyên như backend NestJS gốc.',
       '- Toàn bộ dữ liệu đầu vào được kiểm tra bằng Joi (sai → HTTP 400 kèm thông báo chi tiết).',
-      '- Đăng nhập bằng MNV (emp_no) + PIN hoặc khuôn mặt — nhân viên chỉ cần nhớ mã nhân viên, không cần biết id nội bộ.',
+      '- Đăng nhập bằng MNV (emp_no) + PIN - nhân viên chỉ cần nhớ mã nhân viên',
       '- Đăng nhập thành công trả token; các route nghiệp vụ mang header Authorization: Bearer <token>.',
     ].join('\n'),
   },
   servers: [{ url: '/', description: 'Server hiện tại' }],
   tags: [
-    { name: 'Auth', description: 'Đăng nhập PIN / khuôn mặt, hồ sơ cá nhân' },
+    { name: 'Auth', description: 'Đăng nhập PIN, hồ sơ cá nhân' },
     { name: 'Devices', description: 'Thiết bị: danh sách, quét mã, trạng thái, xét duyệt, chuyển xưởng, hoàn tác' },
     { name: 'Maintenance Orders', description: 'Hạng mục bảo dưỡng chuẩn & đơn bảo dưỡng theo thiết bị' },
     { name: 'Delayed Devices', description: 'Thiết bị trễ hạn (chỉ admin) + đồng bộ' },
@@ -83,7 +83,7 @@ const spec = {
     '/api/auth/user/status': {
       get: {
         tags: ['Auth'],
-        summary: 'Trạng thái tài khoản (PIN / khuôn mặt)',
+        summary: 'Trạng thái tài khoản (PIN)',
         parameters: [{ name: 'empNo', in: 'query', required: true, schema: { type: 'string' }, description: 'Mã nhân viên (MNV)' }],
         responses: okSchema({
           type: 'object',
@@ -93,8 +93,7 @@ const spec = {
             empName: { type: 'string' },
             position: { type: 'string' },
             avatarUrl: { type: 'string', nullable: true },
-            hasPin: { type: 'boolean' },
-            hasFace: { type: 'boolean' },
+            hasPin: { type: 'boolean' }
           },
         }),
       },
@@ -189,45 +188,12 @@ const spec = {
         responses: { ...ok('success'), 401: { description: 'WRONG_CURRENT_PIN' } },
       },
     },
-    '/api/auth/face/register': {
-      post: {
-        tags: ['Auth'],
-        summary: 'Đăng ký khuôn mặt (ảnh đã upload lên storage, truyền URL)',
-        requestBody: {
-          required: true,
-          content: { 'application/json': { schema: { type: 'object', required: ['empNo', 'imageUrl'], properties: { empNo: { type: 'string', description: 'Mã nhân viên (MNV)' }, imageUrl: { type: 'string' }, relaxClose: { type: 'boolean' } } } } },
-        },
-        responses: { ...ok('success / lỗi chất lượng ảnh'), ...bad },
-      },
-    },
     '/api/auth/register-access': {
       post: {
         tags: ['Auth'],
         summary: 'Kiểm tra mật khẩu cho phép mở đăng ký',
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['password'], properties: { password: { type: 'string' } } } } } },
         responses: okSchema({ type: 'object', properties: { allowed: { type: 'boolean' } } }),
-      },
-    },
-    '/api/auth/face/verify': {
-      post: {
-        tags: ['Auth'],
-        summary: 'Đăng nhập bằng khuôn mặt (so sánh với ảnh đã đăng ký) — trả token phiên',
-        requestBody: {
-          required: true,
-          content: { 'application/json': { schema: { type: 'object', required: ['empNo', 'imageUrl'], properties: { empNo: { type: 'string', description: 'Mã nhân viên (MNV)' }, imageUrl: { type: 'string' } } } } },
-        },
-        responses: okSchema({
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-            token: { type: 'string' },
-            expiresAt: { type: 'string', format: 'date-time' },
-            userId: { type: 'string' },
-            empNo: { type: 'string' },
-            empName: { type: 'string' },
-            message: { type: 'string' },
-          },
-        }),
       },
     },
 

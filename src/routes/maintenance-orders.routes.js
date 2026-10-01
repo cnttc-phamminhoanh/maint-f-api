@@ -17,8 +17,8 @@ router.get(
   ),
   asyncHandler(async (req, res) => {
     const q = getQuery(req);
-    const items = await orderService.listTemplates(q.equType, q.mtFlag);
-    res.json({ items });
+    const result = await orderService.listTemplates(q.equType, q.mtFlag);
+    res.json({ items: result.items });
   }),
 );
 
@@ -26,8 +26,8 @@ router.get(
   '/device/:deviceId',
   validate(Joi.object({ deviceId: Joi.string().min(1).max(50).required() }), 'params'),
   asyncHandler(async (req, res) => {
-    const items = await orderService.listOrdersByDevice(req.params.deviceId);
-    res.json({ items, total: items.length });
+    const result = await orderService.listOrdersByDevice(req.params.deviceId);
+    res.json({ items: result.items, total: result.items.length });
   }),
 );
 
