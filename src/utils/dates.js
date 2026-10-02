@@ -53,7 +53,7 @@ function getNextDueDay(device) {
   if (!base) return null;
   const cycle = device.maintenanceCycle || device.maintenanceType || '1_month';
   if (cycle === '1_week') return addDays(base, 7);
-  if (cycle === '2_weeks') return addDays(base, 14);
+  if (cycle === '2_weeks' || cycle === '2_week') return addDays(base, 14);
   return addMonthsClamped(base, CYCLE_MONTHS[cycle] || 1);
 }
 

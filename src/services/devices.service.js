@@ -22,7 +22,7 @@ const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order
 // bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1)
 const NEXT_DUE_SQL = `CAST(CASE
   WHEN d.maintenance_type = '1_week' THEN DATEADD(day, 7, ISNULL(d.max_mt_date, d.use_date))
-  WHEN d.maintenance_type = '2_weeks' THEN DATEADD(day, 14, ISNULL(d.max_mt_date, d.use_date))
+  WHEN d.maintenance_type IN ('2_weeks','2_week') THEN DATEADD(day, 14, ISNULL(d.max_mt_date, d.use_date))
   WHEN d.maintenance_type = '1_month' THEN DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
   WHEN d.maintenance_type = '1_year' THEN DATEADD(year, 1, ISNULL(d.max_mt_date, d.use_date))
   ELSE DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
@@ -264,7 +264,7 @@ async function listDevices(params) {
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'rejected' THEN 1 ELSE 0 END), 0) AS stRejected,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'not_due' THEN 1 ELSE 0 END), 0) AS stNotDue,
       ISNULL(SUM(CASE WHEN d.maintenance_type = '1_week' THEN 1 ELSE 0 END), 0) AS cy1w,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '2_weeks' THEN 1 ELSE 0 END), 0) AS cy2w,
+      ISNULL(SUM(CASE WHEN d.maintenance_type IN ('2_weeks','2_week') THEN 1 ELSE 0 END), 0) AS cy2w,
       ISNULL(SUM(CASE WHEN d.maintenance_type = '1_month' THEN 1 ELSE 0 END), 0) AS cy1m,
       ISNULL(SUM(CASE WHEN d.maintenance_type = '1_year' THEN 1 ELSE 0 END), 0) AS cy1y
     FROM eqm_mnt d ${joinSql} ${baseWhere}`,
@@ -280,7 +280,11 @@ async function listDevices(params) {
   }
   if (params.cycle) {
     values.cycle = params.cycle;
-    finalCond.push('d.maintenance_type = @cycle');
+    if (params.cycle === '2_weeks') {
+      finalCond.push('d.maintenance_type IN (\'2_weeks\',\'2_week\')');
+    } else {
+      finalCond.push('d.maintenance_type = @cycle');
+    }
   }
   if (params.due && params.due !== 'all') {
     if (params.due === 'overdue') finalCond.push(`${NEXT_DUE_SQL} < @today`);
