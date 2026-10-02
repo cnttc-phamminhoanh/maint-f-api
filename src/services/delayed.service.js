@@ -50,7 +50,11 @@ async function computeCurrentDelayed() {
   const today = businessToday();
   const current = new Map();
   for (const row of rows) {
-    const due = getNextDueDay(row.max_mt_date, row.use_date, row.maintenance_type);
+    const due = getNextDueDay({
+      lastMaintenanceDate: row.max_mt_date,
+      startDate: row.use_date,
+      maintenanceCycle: row.maintenance_type,
+    });
     if (!due || daysBetween(today, due) >= 0) continue;
     const status = row.maintenance_status || 'not_due';
     current.set(row.equ_no, {
@@ -133,7 +137,7 @@ async function runSync() {
       const params = {};
       chunk.forEach((d, idx) => {
         const p = `i${idx}_`;
-        values.push(`(@${p}no, @${p}name, @${p}reason, @${p}due, @${p}over, @${p}snap, @${p}max, @${p}type, @${p}mnt, @${p}resp, @${p}dept)`);
+        values.push(`(@${p}no, @${p}name, @${p}reason, @${p}due, @${p}over, @${p}snap, @${p}max, @${p}type, @${p}mnt, @${p}resp, @${p}dept, @${p}snap)`);
         params[`${p}no`] = d.equNo;
         params[`${p}name`] = d.equName;
         params[`${p}reason`] = d.reason;
@@ -213,7 +217,18 @@ async function buildDeptTrend(days = 30) {
       start: toIso(r.occurred_at).slice(0, 10),
       end: r.resolved_at ? toIso(r.resolved_at).slice(0, 10) : null,
     }));
-  const deptCodes = Array.from(new Set(episodes.map((e) => e.dept)));
+  const allDepts = await query(
+    'SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt',
+  );
+  const nameMap = new Map(
+    allDepts.map((d) => [d.mnt_dept_no, d.mnt_dept_name]),
+  );
+  const deptCodes = Array.from(
+    new Set([
+      ...allDepts.map((d) => d.mnt_dept_no),
+      ...episodes.map((e) => e.dept),
+    ]),
+  );
   const countMap = new Map(deptCodes.map((c) => [c, dates.map(() => 0)]));
   for (const ep of episodes) {
     const counts = countMap.get(ep.dept);
@@ -224,15 +239,6 @@ async function buildDeptTrend(days = 30) {
         counts[i] += 1;
       }
     }
-  }
-  const nameMap = new Map();
-  if (deptCodes.length > 0) {
-    const { sql: inSql, params } = inClause(deptCodes, 'd');
-    const deptNames = await query(
-      `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${inSql})`,
-      params,
-    );
-    for (const d of deptNames) nameMap.set(d.mnt_dept_no, d.mnt_dept_name);
   }
   const series = deptCodes
     .map((code) => ({
@@ -309,21 +315,21 @@ async function queryList(reason, page, pageSize) {
   const deptHistoryCounts = await buildDeptHistory();
 
   const today = businessToday();
-
   const offset = (page - 1) * pageSize;
   const rows = await query(
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
-      d.maintainer_emp_no, d.snapshot_at, d.occurred_at,
-      d.resolved_at, d.responsible_emp_no, d.maintenance_type,
-      e.equ_name, e.max_mt_date, e.use_date
-    FROM eqm_mnt_delay d
-    LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
-    WHERE ${whereSql}
-    ORDER BY CASE WHEN d.resolved_at IS NULL
-      THEN DATEDIFF(day, d.next_due_date, GETDATE())
-      ELSE DATEDIFF(day, d.next_due_date, d.resolved_at) END DESC,
-      d.equ_no ASC
-    OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
+             d.maintainer_emp_no, d.snapshot_at, d.occurred_at,
+             d.resolved_at, d.responsible_emp_no, d.maintenance_type,
+             e.equ_name, e.max_mt_date, e.use_date,
+             e.maintenance_type AS e_maintenance_type
+     FROM eqm_mnt_delay d
+     LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
+     WHERE ${whereSql}
+     ORDER BY CASE WHEN d.resolved_at IS NULL
+       THEN DATEDIFF(day, d.next_due_date, GETDATE())
+       ELSE DATEDIFF(day, d.next_due_date, d.resolved_at) END DESC,
+       d.equ_no ASC
+     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     { ...params, offset },
   );
 
@@ -354,7 +360,15 @@ async function queryList(reason, page, pageSize) {
   }
 
   const items = rows.map((r) => {
-    const nextDue = fmtDate(r.next_due_date);
+    const storedDue = fmtDate(r.next_due_date);
+    const liveDue = r.resolved_at
+      ? null
+      : getNextDueDay({
+        lastMaintenanceDate: r.max_mt_date,
+        startDate: r.use_date,
+        maintenanceCycle: r.e_maintenance_type || r.maintenance_type,
+      });
+    const nextDue = liveDue || storedDue;
     const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
     const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
     return {
@@ -422,13 +436,14 @@ async function getDelayHistory(dept, page, pageSize) {
 
   const rows = await query(
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
-      d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
-      e.equ_name
-    FROM eqm_mnt_delay d
-    LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
-    ${whereSql}
-    ORDER BY d.occurred_at DESC, d.id DESC
-    OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
+            d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
+            e.equ_name, e.max_mt_date, e.use_date,
+            e.maintenance_type AS e_maintenance_type
+     FROM eqm_mnt_delay d
+     LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
+     ${whereSql}
+     ORDER BY d.occurred_at DESC, d.id DESC
+     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     params,
   );
 
@@ -445,7 +460,15 @@ async function getDelayHistory(dept, page, pageSize) {
   ]);
 
   const items = rows.map((r) => {
-    const nextDue = fmtDate(r.next_due_date);
+    const storedDue = fmtDate(r.next_due_date);
+    const liveDue = r.resolved_at
+      ? null
+      : getNextDueDay({
+        lastMaintenanceDate: r.max_mt_date,
+        startDate: r.use_date,
+        maintenanceCycle: r.e_maintenance_type || r.maintenance_type,
+      });
+    const nextDue = liveDue || storedDue;
     const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
     const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
     return {
