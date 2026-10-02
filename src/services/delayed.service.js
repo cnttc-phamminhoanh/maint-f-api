@@ -308,15 +308,22 @@ async function queryList(reason, page, pageSize) {
 
   const deptHistoryCounts = await buildDeptHistory();
 
+  const today = businessToday();
+
   const offset = (page - 1) * pageSize;
   const rows = await query(
-    `SELECT id, equ_no, equ_name, reason, next_due_date, days_overdue,
-            mnt_dept_no, maintainer_emp_no, max_mt_date, maintenance_type,
-            snapshot_at, occurred_at, resolved_at, responsible_emp_no
-     FROM eqm_mnt_delay
-     WHERE ${whereSql}
-     ORDER BY days_overdue DESC, equ_no ASC
-     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
+    `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
+      d.maintainer_emp_no, d.snapshot_at, d.occurred_at,
+      d.resolved_at, d.responsible_emp_no, d.maintenance_type,
+      e.equ_name, e.max_mt_date, e.use_date
+    FROM eqm_mnt_delay d
+    LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
+    WHERE ${whereSql}
+    ORDER BY CASE WHEN d.resolved_at IS NULL
+      THEN DATEDIFF(day, d.next_due_date, GETDATE())
+      ELSE DATEDIFF(day, d.next_due_date, d.resolved_at) END DESC,
+      d.equ_no ASC
+    OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     { ...params, offset },
   );
 
@@ -346,25 +353,30 @@ async function queryList(reason, page, pageSize) {
     for (const ep of epRows) episodeMap.set(ep.equ_no, Number(ep.cnt));
   }
 
-  const items = rows.map((r) => ({
-    id: r.id,
-    deviceId: r.equ_no,
-    deviceCode: r.equ_no,
-    deviceName: r.equ_name || null,
-    reason: r.reason,
-    nextDueDate: fmtDate(r.next_due_date),
-    daysOverdue: Number(r.days_overdue),
-    departmentId: r.mnt_dept_no || null,
-    departmentName: r.mnt_dept_no ? deptMap.get(r.mnt_dept_no) || null : null,
-    maintainerId: r.maintainer_emp_no || null,
-    maintainerName: r.maintainer_emp_no ? nameMap.get(r.maintainer_emp_no) || null : null,
-    responsibleUserId: r.responsible_emp_no || null,
-    responsibleName: r.responsible_emp_no ? nameMap.get(r.responsible_emp_no) || null : null,
-    lastMaintenanceDate: r.max_mt_date ? fmtDate(r.max_mt_date) : null,
-    maintenanceCycle: r.maintenance_type,
-    snapshotAt: toIso(r.snapshot_at),
-    episodeCount: episodeMap.get(r.equ_no) || 1,
-  }));
+  const items = rows.map((r) => {
+    const nextDue = fmtDate(r.next_due_date);
+    const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
+    const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
+    return {
+      id: r.id,
+      deviceId: r.equ_no,
+      deviceCode: r.equ_no,
+      deviceName: r.equ_name || null,
+      reason: r.reason,
+      nextDueDate: nextDue,
+      daysOverdue: overdue,
+      departmentId: r.mnt_dept_no || null,
+      departmentName: r.mnt_dept_no ? deptMap.get(r.mnt_dept_no) || null : null,
+      maintainerId: r.maintainer_emp_no || null,
+      maintainerName: r.maintainer_emp_no ? nameMap.get(r.maintainer_emp_no) || null : null,
+      responsibleUserId: r.responsible_emp_no || null,
+      responsibleName: r.responsible_emp_no ? nameMap.get(r.responsible_emp_no) || null : null,
+      lastMaintenanceDate: r.max_mt_date ? fmtDate(r.max_mt_date) : null,
+      maintenanceCycle: r.maintenance_type,
+      snapshotAt: toIso(r.snapshot_at),
+      episodeCount: episodeMap.get(r.equ_no) || 1,
+    };
+  });
 
   return {
     items,
@@ -392,30 +404,35 @@ async function adminSync(req) {
 }
 
 // Lich su tre han (public, trang BI): toan bo episode ke ca da giai quyet
+// days_overdue & ten thiet bi tinh/lay tu eqm_mnt luc doc, ko can sync
 async function getDelayHistory(dept, page, pageSize) {
   const where = [];
   const params = { offset: (page - 1) * pageSize, pageSize };
   if (dept) {
-    where.push('mnt_dept_no = @dept');
+    where.push('d.mnt_dept_no = @dept');
     params.dept = dept;
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
   const totalRow = await query(
-    `SELECT COUNT(*) AS cnt FROM eqm_mnt_delay ${whereSql}`,
+    `SELECT COUNT(*) AS cnt FROM eqm_mnt_delay d ${whereSql}`,
     params,
   );
   const total = totalRow.length > 0 ? Number(totalRow[0].cnt) : 0;
 
   const rows = await query(
-    `SELECT id, equ_no, equ_name, reason, next_due_date, days_overdue,
-            mnt_dept_no, responsible_emp_no, occurred_at, resolved_at
-     FROM eqm_mnt_delay ${whereSql}
-     ORDER BY occurred_at DESC, id DESC
-     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
+    `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
+      d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
+      e.equ_name
+    FROM eqm_mnt_delay d
+    LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
+    ${whereSql}
+    ORDER BY d.occurred_at DESC, d.id DESC
+    OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     params,
   );
 
+  const today = businessToday();
   const empNos = new Set();
   const deptNos = new Set();
   for (const r of rows) {
@@ -427,19 +444,26 @@ async function getDelayHistory(dept, page, pageSize) {
     fetchDeptNameMap(Array.from(deptNos)),
   ]);
 
-  const items = rows.map((r) => ({
-    id: r.id,
-    deviceCode: r.equ_no,
-    deviceName: r.equ_name || null,
-    departmentName: r.mnt_dept_no ? deptMap.get(r.mnt_dept_no) || r.mnt_dept_no : null,
-    maintenanceCycle: '',
-    reason: r.reason,
-    responsibleEmpNo: r.responsible_emp_no || null,
-    responsibleName: r.responsible_emp_no ? nameMap.get(r.responsible_emp_no) || null : null,
-    occurredAt: toIso(r.occurred_at),
-    resolvedAt: r.resolved_at ? toIso(r.resolved_at) : null,
-    daysOverdue: Number(r.days_overdue),
-  }));
+  const items = rows.map((r) => {
+    const nextDue = fmtDate(r.next_due_date);
+    const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
+    const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
+    return {
+      id: r.id,
+      equNo: r.equ_no,
+      equName: r.equ_name || null,
+      departmentCode: r.mnt_dept_no || null,
+      departmentName: r.mnt_dept_no ? deptMap.get(r.mnt_dept_no) || r.mnt_dept_no : null,
+      cycle: r.maintenance_type || '',
+      reason: r.reason,
+      responsibleEmpNo: r.responsible_emp_no || null,
+      responsibleName: r.responsible_emp_no ? nameMap.get(r.responsible_emp_no) || null : null,
+      occurredAt: toIso(r.occurred_at),
+      resolvedAt: r.resolved_at ? toIso(r.resolved_at) : null,
+      nextDueDate: nextDue,
+      daysOverdue: overdue,
+    };
+  });
 
   return { items, total, page, pageSize };
 }
