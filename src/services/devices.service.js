@@ -621,6 +621,12 @@ async function approveCompletion(id, userId) {
        WHERE id = @id`,
       { today, approver: requester.emp_no, id },
     );
+    await txQuery(
+      tx,
+      `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
+       WHERE equ_no = @equNo AND resolved_at IS NULL`,
+      { equNo: row.equ_no },
+    );
   });
   return { success: true };
 }
@@ -670,6 +676,15 @@ async function bulkApproveCompletion(ids, userId) {
        WHERE id IN (${upIn})`,
       { ...upParams, today, approver: requester.emp_no },
     );
+    const eqNos = Array.from(new Set(rows.map((r) => r.equ_no)));
+    for (const equNo of eqNos) {
+      await txQuery(
+        tx,
+        `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
+         WHERE equ_no = @equNo AND resolved_at IS NULL`,
+        { equNo },
+      );
+    }
   });
   return { success: true, processed: rows.length };
 }

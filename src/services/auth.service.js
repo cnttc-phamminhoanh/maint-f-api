@@ -5,7 +5,6 @@ const config = require('../config');
 const { resolveByEmpNo, toPublicUser } = require('../utils/auth');
 const { createSession, destroyUserSessions } = require('../utils/session');
 const { getRemainingLockMinutes, recordFailure, resetAttempts } = require('../utils/login-lockout');
-const { faceQualityCheck, faceCompare } = require('./face');
 
 // Cua so truot trong bo nho chan do mat khau dang ky
 const registerAttempts = [];
@@ -161,61 +160,6 @@ async function checkRegisterAccess(password) {
   return { ok: true };
 }
 
-async function registerFace(empNo, imageUrl, relaxClose) {
-  const row = await resolveByEmpNo(empNo);
-  if (!row) throw new ApiError(404, 'User not found');
-  if (row.face_image_url && !relaxClose) {
-    return { success: false, message: 'FACE_ALREADY_REGISTERED' };
-  }
-  const issues = await faceQualityCheck(imageUrl);
-  if (issues.length > 0) {
-    return { success: false, message: 'FACE_QUALITY_FAILED', issues };
-  }
-  await query('UPDATE emp_mnt SET face_image_url = @u WHERE id = @id', {
-    u: imageUrl,
-    id: row.id,
-  });
-  return { success: true };
-}
-
-async function verifyFace(empNo, imageUrl) {
-  const row = await resolveByEmpNo(empNo);
-  if (!row) throw new ApiError(404, 'User not found');
-  if (!row.face_image_url) return { success: false, message: 'FACE_NOT_REGISTERED' };
-  const lockMinutes = await getRemainingLockMinutes(row.emp_no);
-  if (lockMinutes > 0) {
-    return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes };
-  }
-  try {
-    const matched = await faceCompare(imageUrl, row.face_image_url);
-    if (!matched) {
-      const lock = await recordFailure(row.emp_no);
-      if (lock.locked) {
-        return { success: false, errorCode: 'ACCOUNT_LOCKED', lockMinutes: config.pinLockMinutes };
-      }
-      return { success: false, message: 'FACE_MISMATCH' };
-    }
-    await resetAttempts(row.emp_no);
-    const session = await createSession(row.emp_no);
-    return {
-      success: true,
-      token: session.token,
-      expiresAt: session.expiresAt,
-      userId: row.emp_no,
-      empNo: row.emp_no,
-      empName: row.emp_name,
-      position: row.position || '',
-      avatarUrl: row.avatar_url || '',
-    };
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    if (err && err.code === 'FACE_COMPARE_NOT_CONFIGURED') {
-      return { success: false, message: 'FACE_COMPARE_NOT_CONFIGURED' };
-    }
-    return { success: false, message: 'COMPARISON_FAILED' };
-  }
-}
-
 async function listUsers(position) {
   const where = position ? 'WHERE position = @p' : '';
   const params = position ? { p: position } : undefined;
@@ -233,7 +177,5 @@ module.exports = {
   verifyPinLogin,
   changePin,
   checkRegisterAccess,
-  registerFace,
-  verifyFace,
   listUsers,
 };

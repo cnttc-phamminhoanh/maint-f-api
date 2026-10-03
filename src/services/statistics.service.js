@@ -143,7 +143,7 @@ async function getOverview() {
   const episodeTotalRows = await query('SELECT COUNT(*) AS cnt FROM eqm_mnt_delay');
   const delayedHistoryTotal = episodeTotalRows[0] ? episodeTotalRows[0].cnt : 0;
   const deptDelayHistory = await buildDeptHistory();
-  const deptDelayTrend = await buildDeptTrend();
+  const deptDelayTrend = await buildDeptTrend(365);
 
   const cycleStatsRows = await query(
     `SELECT mnt_dept_no AS dept, maintenance_type AS mtype, COUNT(*) AS cnt

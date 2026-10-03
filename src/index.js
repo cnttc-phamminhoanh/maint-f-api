@@ -32,7 +32,7 @@ app.get('/docs.json', (req, res) => res.json(swaggerSpec));
 
 app.use('/api/auth', authRoutes);
 
-// Trang BI la cong khai (giong cloud: statistics controller khong can login)
+// Trang BI la cong khai (statistics controller khong can login)
 app.use('/api/statistics', statisticsRoutes);
 
 // Authorization: Bearer <token> va userId trong body/query phai trung voi chu phien
