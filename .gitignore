@@ -37,3 +37,6 @@ temp/
 *.pid
 *.seed
 *.pid.lock
+
+logs/
+*.log

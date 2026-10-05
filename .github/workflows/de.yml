@@ -15,7 +15,7 @@ jobs:
         run: |
           git fetch origin master
           git reset --hard origin/master
-          git clean -fd -e .env
+          git clean -fd -e .env -e logs
 
       - name: Check Node.js
         run: |
@@ -29,6 +29,10 @@ jobs:
       - name: Run ESLint
         working-directory: /home/germton/germton_services/maint-f-api
         run: npm run lint
+
+      - name: Ensure log directory exists
+        working-directory: /home/germton/germton_services/maint-f-api
+        run: mkdir -p logs
 
       - name: Restart PM2
         working-directory: /home/germton/germton_services/maint-f-api
