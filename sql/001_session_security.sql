@@ -9,7 +9,7 @@ BEGIN
         token_hash  VARCHAR(64)  NOT NULL PRIMARY KEY,   -- SHA-256 hex cua token
         emp_no      VARCHAR(100) NOT NULL,
         expires_at  DATETIME2    NOT NULL,
-        created_at  DATETIME2    NOT NULL DEFAULT SYSUTCDATETIME(),
+        created_at  DATETIME2    NOT NULL DEFAULT GETDATE(),  -- chuan gio HK, khop GETDATE()/expires_at
         CONSTRAINT fk_emp_mnt_session_emp
             FOREIGN KEY (emp_no) REFERENCES dbo.emp_mnt(emp_no)
             ON UPDATE CASCADE ON DELETE CASCADE
