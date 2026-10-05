@@ -128,7 +128,7 @@ const spec = {
     '/api/auth/user/profile': {
       post: {
         tags: ['Auth'],
-        summary: 'Cập nhật tên hiển thị / ảnh đại diện',
+        summary: 'Cập nhật tên hiển thị',
         requestBody: {
           required: true,
           content: {

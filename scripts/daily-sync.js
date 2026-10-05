@@ -1,5 +1,8 @@
 // Job lich su tre han chay 1 lan/ngay qua cron Linux (nguon ghi duy nhat):
 //   5 0 * * * cd <duong-dan>/local-api && node scripts/daily-sync.js >> /var/log/mnt-delay-sync.log 2>&1
+// Chot 2026-10-05: datetime luu theo dong ho database Hong Kong (UTC+8)
+process.env.TZ = 'Asia/Hong_Kong';
+
 const { connectDb, getPool } = require('../src/db');
 const { runSync } = require('../src/services/delayed.service');
 
