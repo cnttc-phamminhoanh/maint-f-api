@@ -4,6 +4,7 @@ const {
   businessToday,
   fmtDate,
   toIso,
+  hkDateStr,
   getNextDueDay,
   daysBetween,
   addDays,
@@ -216,8 +217,8 @@ async function buildDeptTrend(days = 30) {
     .filter((r) => Boolean(r.mnt_dept_no))
     .map((r) => ({
       dept: r.mnt_dept_no,
-      start: toIso(r.occurred_at).slice(0, 10),
-      end: r.resolved_at ? toIso(r.resolved_at).slice(0, 10) : null,
+      start: hkDateStr(r.occurred_at),
+      end: r.resolved_at ? hkDateStr(r.resolved_at) : null,
     }));
   const allDepts = await query(
     'SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt',
@@ -328,11 +329,11 @@ async function queryList(reason, page, pageSize) {
      LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
      WHERE ${whereSql}
      ORDER BY CASE WHEN d.resolved_at IS NULL
-       THEN DATEDIFF(day, d.next_due_date, GETDATE())
+       THEN DATEDIFF(day, d.next_due_date, CAST(@today AS date))
        ELSE DATEDIFF(day, d.next_due_date, d.resolved_at) END DESC,
        d.equ_no ASC
      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
-    { ...params, offset },
+    { ...params, offset, today },
   );
 
   const empNos = new Set();

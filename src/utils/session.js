@@ -12,11 +12,11 @@ async function getSession(token) {
   const row = await queryOne(
     `SELECT TOP 1 e.id, e.emp_no, e.position, e.mnt_dept_no
      FROM emp_mnt_session s JOIN emp_mnt e ON e.emp_no = s.emp_no
-     WHERE s.token_hash = @h AND s.expires_at > SYSUTCDATETIME()`,
+     WHERE s.token_hash = @h AND s.expires_at > GETDATE()`,
     { h: hashToken(token) },
   );
   if (!row) {
-    query('DELETE FROM emp_mnt_session WHERE expires_at <= SYSUTCDATETIME()').catch(() => {});
+    query('DELETE FROM emp_mnt_session WHERE expires_at <= GETDATE()').catch(() => {});
   }
   return row;
 }

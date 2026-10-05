@@ -1,3 +1,8 @@
+// Chot 2026-10-05: datetime luu theo dong ho server database (Hong Kong, UTC+8),
+// hien thi tinh toan quy doi sang gio Viet Nam (UTC+7).
+// tedious doc/ghi datetime theo gio may chua process -> ghim TZ truoc moi require khac.
+process.env.TZ = 'Asia/Hong_Kong';
+
 const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');

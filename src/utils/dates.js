@@ -10,6 +10,23 @@ function businessToday(now = new Date()) {
   }).format(now);
 }
 
+const HK_DATE_FORMAT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Hong_Kong',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+// Lay phan ngay (YYYY-MM-DD) cua gia tri datetime luu theo gio Hong Kong.
+// Khong dung toISOString().slice(0,10) (UTC) cho cot datetime: luc 00:00-07:59 HK
+// se bi lui ve ngay truoc.
+function hkDateStr(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return HK_DATE_FORMAT.format(d);
+}
+
 function fmtDate(value) {
   if (!value) return null;
   if (typeof value === 'string') return value.slice(0, 10);
@@ -90,6 +107,7 @@ module.exports = {
   businessToday,
   fmtDate,
   toIso,
+  hkDateStr,
   addDays,
   addMonthsClamped,
   daysBetween,
