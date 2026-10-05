@@ -20,6 +20,11 @@ const config = {
       encrypt: false,
       trustServerCertificate:
         String(process.env.DB_TRUST_SERVER_CERT || 'true') === 'true',
+      // useUTC mac dinh = true: driver doc/ghi Date luon theo tuong UTC, bo qua TZ process.
+      // Dat false de driver theo TZ process (da ghim Asia/Hong_Kong o dong dau index.js),
+      // khop voi GETDATE() (dong ho DB HK). Chinh dong nay moi la khoa chinh;
+      // chi ghim process.env.TZ thi van bi useUTC=true ghi de.
+      useUTC: false,
     },
     pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
     requestTimeout: 60000,
