@@ -503,8 +503,8 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
   const sheetDate = row.completion_requested_at || new Date();
   await txQuery(
     tx,
-    `INSERT INTO eqm_mt1 (sheet_no, sheet_type, sheet_date, mnt_dept_no, emp_no, mt_flag,
-      equ_no, rem, create_date, check_date, create_emp_no, check_emp_no, sheet_sta, check_sta,
+    `INSERT INTO eqm_mt1 (sheet_no, sheet_type, sheet_date, dept_no, emp_no, mt_flag,
+      equ_no, rem, create_date, check_date, create_user, check_user, sheet_sta, check_sta,
       user_list, cur_check_user)
     VALUES (@sheetNo, 'EMGI', @sheetDate, NULL, @empNo, @mtFlag, @equNo, NULL,
       GETDATE(), NULL, @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
