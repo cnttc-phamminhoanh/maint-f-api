@@ -542,6 +542,24 @@ async function submitApproval(id, userId, itemIds) {
   if (row.maintenance_status !== 'in_maintenance' && row.maintenance_status !== 'rejected') {
     throw new ApiError(400, 'Device must be in maintenance or rejected to request approval');
   }
+  // 2026-10-06 user chot: chi nguoi dang chiu trach nhiem vong bao duong nay
+  // (temp ?? maintainer) moi duoc gui xet duyet — truoc day nguoi khac trong bo phan
+  // gui duoc va con ghi temp cuop viec cua nguoi dang lam
+  if (
+    effectiveMaintainerEmpNo(row) !== caller.empNo &&
+    caller.position !== 'admin'
+  ) {
+    if (row.maintenance_status === 'in_maintenance') {
+      throw new ApiError(
+        409,
+        'Thiết bị đang được người khác bảo trì, không thể gửi xét duyệt',
+      );
+    }
+    throw new ApiError(
+      403,
+      'Chỉ người đang chịu trách nhiệm bảo trì mới được gửi lại xét duyệt',
+    );
+  }
 
   let pendingItems = parsePending(row.pending_maintenance_items);
   if (row.maintenance_status === 'in_maintenance') {
@@ -583,15 +601,6 @@ async function submitApproval(id, userId, itemIds) {
 
   const set = ['pending_maintenance_items = @pending', 'rejection_reason = NULL'];
   const values = { id, pending: JSON.stringify(pendingItems) };
-  if (
-    row.maintenance_status === 'in_maintenance' &&
-    effectiveMaintainerEmpNo(row, today) !== caller.empNo &&
-    caller.position !== 'admin'
-  ) {
-    set.push('temp_maintainer_emp_no = @tempEmp', 'temp_maintainer_date = @tempDate');
-    values.tempEmp = caller.empNo;
-    values.tempDate = today;
-  }
   set.push('maintenance_status = \'pending_approval\'', 'completion_requested_at = GETDATE()');
   const updated = await query(
     `UPDATE eqm_mnt SET ${set.join(', ')}${touchSuffix()} OUTPUT inserted.id WHERE id = @id`,
