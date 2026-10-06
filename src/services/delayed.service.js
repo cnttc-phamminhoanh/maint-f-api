@@ -139,13 +139,12 @@ async function runSync() {
       const params = {};
       chunk.forEach((d, idx) => {
         const p = `i${idx}_`;
-        values.push(`(@${p}no, @${p}name, @${p}reason, @${p}due, @${p}over, @${p}snap, @${p}max, @${p}type, @${p}mnt, @${p}resp, @${p}dept, @${p}occ)`);
+        values.push(`(@${p}no, @${p}name, @${p}reason, @${p}due, @${p}over, GETDATE(), @${p}max, @${p}type, @${p}mnt, @${p}resp, @${p}dept, @${p}occ)`);
         params[`${p}no`] = d.equNo;
         params[`${p}name`] = d.equName;
         params[`${p}reason`] = d.reason;
         params[`${p}due`] = d.nextDueDate;
         params[`${p}over`] = d.daysOverdue;
-        params[`${p}snap`] = new Date();
         params[`${p}occ`] = addDays(d.nextDueDate, 1);
         params[`${p}max`] = d.maxMtDate;
         params[`${p}type`] = d.maintenanceType;

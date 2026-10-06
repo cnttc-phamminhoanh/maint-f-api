@@ -30,7 +30,9 @@ function hkDateStr(value) {
 function fmtDate(value) {
   if (!value) return null;
   if (typeof value === 'string') return value.slice(0, 10);
-  return value.toISOString().slice(0, 10);
+  // Driver doc Date theo tuong HK (useUTC:false + TZ ghim) -> lay phan ngay theo HK;
+  // toISOString().slice(0,10) (UTC) se lui 1 ngay (vd 2026-09-12 00:00 HK -> 2026-09-11T16:00Z)
+  return hkDateStr(value);
 }
 
 function toIso(value) {

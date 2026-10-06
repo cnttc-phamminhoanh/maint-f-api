@@ -25,7 +25,7 @@ async function createSession(empNo) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + config.sessionTtlDays * 86400000);
   await query(
-    'INSERT INTO emp_mnt_session (token_hash, emp_no, expires_at) VALUES (@h, @e, @x)',
+    'INSERT INTO emp_mnt_session (token_hash, emp_no, expires_at, created_at) VALUES (@h, @e, @x, GETDATE())',
     { h: hashToken(token), e: empNo, x: expiresAt },
   );
   return { token, expiresAt: expiresAt.toISOString() };
