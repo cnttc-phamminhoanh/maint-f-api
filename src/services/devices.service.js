@@ -479,7 +479,7 @@ function parsePending(raw) {
 async function generateSheetNo(tx, today) {
   // FIX #4: truy van truc tiep tien to ngay hom nay (ban cu chi lay 1000 dong khong thu tu)
   const [yy, mm, dd] = today.split('-').map((part, i) => (i === 0 ? part.slice(-2) : part));
-  const prefix = `EMGI${yy}${mm}${dd}`;
+  const prefix = `EMGIA${yy}${mm}${dd}`;
   const rows = await txQuery(tx, 'SELECT sheet_no FROM eqm_mt1 WHERE sheet_no LIKE @pfx', {
     pfx: `${prefix}%`,
   });
