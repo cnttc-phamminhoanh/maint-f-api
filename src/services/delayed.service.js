@@ -477,7 +477,7 @@ async function getDelayHistory(dept, page, pageSize) {
     const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
     const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
     return {
-      id: r.id,
+      id: String(r.id),
       equNo: r.equ_no,
       equName: r.equ_name || null,
       departmentCode: r.mnt_dept_no || null,

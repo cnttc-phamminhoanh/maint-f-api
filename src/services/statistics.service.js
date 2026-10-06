@@ -265,7 +265,7 @@ async function getEquipmentStatistics(params) {
         ? row.temp_maintainer_emp_no || row.maintainer_emp_no || null
         : null;
     return {
-      id: row.id,
+      id: String(row.id),
       equNo: row.equ_no,
       equName: row.equ_name,
       equType: row.equ_type || null,

@@ -104,7 +104,9 @@ function toDeviceRecord(row, empNameMap, today) {
   );
   const showMaintenanceBy = ['in_maintenance', 'pending_approval', 'rejected'].includes(status);
   return {
-    id: row.id,
+    // SQL Server tra id kieu int -> ep string dung hop đồng DeviceRecord.id,
+    // tranh FE gui lai ids so bi Joi.string() tu choi (400 bulk-approve 2026-10-06)
+    id: String(row.id),
     code: row.equ_no,
     name: row.equ_name,
     startDate: fmtDate(row.use_date),
@@ -397,7 +399,7 @@ async function listFactories(userId) {
   }
   const items = [];
   for (const [factory, approver] of byFactory) {
-    items.push({ factory, approver: { userId: approver.id, empNo: approver.empNo, empName: approver.empName } });
+    items.push({ factory, approver: { userId: approver.empNo, empNo: approver.empNo, empName: approver.empName } });
   }
   return { items };
 }
