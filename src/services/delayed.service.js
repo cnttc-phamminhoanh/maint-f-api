@@ -1,5 +1,5 @@
 const { query, withTransaction, txQuery, inClause } = require('../db');
-const { assertAdmin } = require('../utils/auth');
+const { assertAdmin, getCaller } = require('../utils/auth');
 const {
   businessToday,
   fmtDate,
@@ -406,16 +406,19 @@ async function queryList(reason, page, pageSize) {
   };
 }
 
-async function adminList(req) {
-  await assertAdmin(req);
-  const reason = (req.query.reason || '').toString();
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
-  return queryList(reason, page, pageSize);
+// Route truyen (userId, reason, page, pageSize) — assertAdmin nhan chuoi position,
+// truoc 2026-10-06 truyen nham doi so khien moi ke ca admin deu bi 403 'not admin'
+async function adminList(userId, reason, page, pageSize) {
+  const caller = await getCaller(userId);
+  assertAdmin(caller.position);
+  const safePage = Math.max(1, parseInt(String(page), 10) || 1);
+  const safePageSize = Math.min(50, Math.max(1, parseInt(String(pageSize), 10) || 30));
+  return queryList((reason || '').toString(), safePage, safePageSize);
 }
 
-async function adminSync(req) {
-  await assertAdmin(req);
+async function adminSync(userId) {
+  const caller = await getCaller(userId);
+  assertAdmin(caller.position);
   return runSync();
 }
 
