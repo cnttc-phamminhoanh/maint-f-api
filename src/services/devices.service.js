@@ -506,7 +506,7 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
     `INSERT INTO eqm_mt1 (sheet_no, sheet_type, sheet_date, dept_no, emp_no, mt_flag,
       equ_no, rem, create_date, check_date, create_user, check_user, sheet_sta, check_sta,
       user_list, cur_check_user)
-    VALUES (@sheetNo, 'EMGI', @sheetDate, NULL, @empNo, @mtFlag, @equNo, NULL,
+    VALUES (@sheetNo, 'EMGIA', @sheetDate, NULL, @empNo, @mtFlag, @equNo, NULL,
       GETDATE(), NULL, @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
     {
       sheetNo,
