@@ -91,14 +91,16 @@ function effectiveStatus(row, today) {
   return nextDue <= today ? 'needs_maintenance' : 'not_due';
 }
 
-function isTempActive(row, today) {
-  const tempDate = fmtDate(row.tempMaintainerDate || row.temp_maintainer_date);
-  return Boolean(tempDate && tempDate === today);
+// 2026-10-06 user chot: nguoi quet ma tiep quan chiu trach nhiem den khi xong viec,
+// KHONG het hieu luc qua ngay moi. temp chi bi xoa khi: hoan tac / duyet hoan thanh /
+// chuyen nguoi phu trach moi. temp_maintainer_date chi con la thong tin ngay quet.
+function isTempActive(row) {
+  return Boolean(row.tempMaintainerEmpNo || row.temp_maintainer_emp_no);
 }
 
-// Nguoi phu trach hieu luc: temp chi co hieu luc trong ngay quet ma
-function effectiveMaintainerEmpNo(row, today) {
-  if (isTempActive(row, today)) {
+// Nguoi phu trach hieu luc: temp (nguoi dang lam) uu tien, khong phu thuoc ngay quet
+function effectiveMaintainerEmpNo(row) {
+  if (isTempActive(row)) {
     return row.tempMaintainerEmpNo || row.temp_maintainer_emp_no || null;
   }
   return row.maintainerEmpNo || row.maintainer_emp_no || null;

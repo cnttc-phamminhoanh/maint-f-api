@@ -199,15 +199,18 @@ function buildScopeCondition(params, caller, values, _today) {
     }
     values.callerEmpNo = caller.empNo;
     parts.push('d.maintainer_emp_no = @callerEmpNo');
-    parts.push('(d.temp_maintainer_emp_no = @callerEmpNo AND d.temp_maintainer_date = @today)');
+    // temp khong het han qua ngay: thiet bi da tiep quan van thuoc ve nguoi quet ma
+    parts.push('d.temp_maintainer_emp_no = @callerEmpNo');
     return [`(${parts.join(' OR ')})`];
   }
   case 'nhan_vien_bao_tri':
     values.callerEmpNo = caller.empNo;
+    // temp khong het han qua ngay: thiet bi cua minh = minh phu trach va chua ai tiep quan,
+    // hoac minh da tiep quan (bat ke ngay nao)
     return [
       `((d.maintainer_emp_no = @callerEmpNo
-           AND (d.temp_maintainer_date IS NULL OR d.temp_maintainer_date <> @today))
-         OR (d.temp_maintainer_emp_no = @callerEmpNo AND d.temp_maintainer_date = @today))`,
+           AND (d.temp_maintainer_emp_no IS NULL OR d.temp_maintainer_emp_no = @callerEmpNo))
+         OR d.temp_maintainer_emp_no = @callerEmpNo)`,
     ];
   default:
     return ['1 = 0'];
@@ -615,9 +618,11 @@ async function approveCompletion(id, userId) {
     // FIX #2: max_mt_date lay theo ngay kinh doanh GMT+7 (ban cu dung UTC)
     await txQuery(
       tx,
+      // Vong bao duong ket thuc: xoa temp de vong sau trach nhiem ve nguoi phu trach
       `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @today,
         approver_emp_no = @approver, completion_requested_at = NULL,
-        pending_maintenance_items = NULL${touchSuffix()}
+        pending_maintenance_items = NULL,
+        temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
        WHERE id = @id`,
       { today, approver: requester.emp_no, id },
     );
@@ -672,7 +677,8 @@ async function bulkApproveCompletion(ids, userId) {
       tx,
       `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @today,
         approver_emp_no = @approver, completion_requested_at = NULL,
-        pending_maintenance_items = NULL${touchSuffix()}
+        pending_maintenance_items = NULL,
+        temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
        WHERE id IN (${upIn})`,
       { ...upParams, today, approver: requester.emp_no },
     );
