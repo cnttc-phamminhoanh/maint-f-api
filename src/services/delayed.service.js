@@ -442,6 +442,7 @@ async function getDelayHistory(dept, page, pageSize) {
   const rows = await query(
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
             d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
+            d.snapshot_at,
             e.equ_name, e.max_mt_date, e.use_date,
             e.maintenance_type AS e_maintenance_type
      FROM eqm_mnt_delay d
@@ -488,6 +489,7 @@ async function getDelayHistory(dept, page, pageSize) {
       responsibleName: r.responsible_emp_no ? nameMap.get(r.responsible_emp_no) || null : null,
       occurredAt: toIso(r.occurred_at),
       resolvedAt: r.resolved_at ? toIso(r.resolved_at) : null,
+      snapshotAt: toIso(r.snapshot_at),
       nextDueDate: nextDue,
       daysOverdue: overdue,
     };
