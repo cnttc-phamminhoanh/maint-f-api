@@ -443,8 +443,8 @@ async function getDelayHistory(dept, page, pageSize) {
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
             d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
             d.snapshot_at,
-            e.equ_name, e.max_mt_date, e.use_date,
-            e.maintenance_type AS e_maintenance_type
+            d.equ_name, d.max_mt_date, e.use_date,
+            d.maintenance_type AS e_maintenance_type
      FROM eqm_mnt_delay d
      LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
      ${whereSql}
