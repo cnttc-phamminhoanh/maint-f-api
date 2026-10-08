@@ -133,7 +133,8 @@ async function runSync() {
         },
       );
     }
-    const CHUNK = 300;
+    // 11 param/dong -> CHUNK 150 = 1650 param, duoi gioi han 2100 cua SQL Server
+    const CHUNK = 150;
     for (let i = 0; i < inserts.length; i += CHUNK) {
       const chunk = inserts.slice(i, i + CHUNK);
       const values = [];

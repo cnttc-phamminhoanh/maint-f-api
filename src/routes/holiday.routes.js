@@ -1,9 +1,10 @@
-const express = require('express');
+const { Router } = require('express');
 const Joi = require('joi');
 const holidayService = require('../services/holiday.service');
-const { ApiError } = require('../errors');
+const { ApiError, asyncHandler } = require('../errors');
+const { validate, getQuery } = require('../middleware/validate');
 
-const router = express.Router();
+const router = Router();
 
 // Chỉ HR và admin mới được thêm/xóa ngày nghỉ; các vị trí khác chỉ đọc.
 function requireHolidayManager(req, res, next) {
@@ -32,36 +33,35 @@ const createSchema = Joi.object({
 });
 
 // GET /api/holidays?year=2026
-router.get('/', async (req, res, next) => {
-  try {
-    const { value } = listSchema.validate(req.query);
-    const items = await holidayService.listHolidays(value.year);
+router.get(
+  '/',
+  validate(listSchema, 'query'),
+  asyncHandler(async (req, res) => {
+    const items = await holidayService.listHolidays(getQuery(req).year);
     res.json({ items });
-  } catch (err) {
-    next(err);
-  }
-});
+  }),
+);
 
 // POST /api/holidays  { items: [{date, name}] }
-router.post('/', requireHolidayManager, async (req, res, next) => {
-  try {
-    const { value, error } = createSchema.validate(req.body || {});
-    if (error) throw new ApiError(400, error.message);
-    const result = await holidayService.createHolidays(value.items, req.user.empNo);
+// validate middleware stripUnknown: bo cac key thua (vd userId) thay vi 400
+router.post(
+  '/',
+  requireHolidayManager,
+  validate(createSchema),
+  asyncHandler(async (req, res) => {
+    const result = await holidayService.createHolidays(req.body.items, req.user.empNo);
     res.json({ success: true, inserted: result.inserted, skipped: result.skipped });
-  } catch (err) {
-    next(err);
-  }
-});
+  }),
+);
 
 // DELETE /api/holidays/:date  (date = YYYY-MM-DD)
-router.delete('/:date', requireHolidayManager, async (req, res, next) => {
-  try {
+router.delete(
+  '/:date',
+  requireHolidayManager,
+  asyncHandler(async (req, res) => {
     const result = await holidayService.deleteHoliday(req.params.date);
     res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+  }),
+);
 
 module.exports = router;
