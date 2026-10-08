@@ -17,6 +17,7 @@ const ALL_STATUSES = [
 ];
 const ALL_CYCLES = ['1_week', '2_weeks', '1_month', '1_year'];
 const ALL_REASONS = ['not_started', 'in_progress', 'awaiting_approval', 'rejected'];
+const DUE_FILTERS = ['today', 'tomorrow', 'normal', 'overdue'];
 const CYCLE_LABEL_MAP = {
   '1_week': '1 Week Maint',
   '2_weeks': '2 Week Maint',
@@ -220,9 +221,74 @@ async function getEquipmentStatistics(params) {
     conditions.push('equ_no LIKE @equNo ESCAPE \'\\\'');
     values.equNo = `%${params.equNo.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
   }
-  const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  if (params.maintenanceStatus) {
+    conditions.push('maintenance_status = @maintenanceStatus');
+    values.maintenanceStatus = params.maintenanceStatus;
+  }
+  let noMatch = false;
+  if (ALL_REASONS.includes(params.delayReason)) {
+    const delayRows = await query(
+      `SELECT equ_no FROM eqm_mnt_delay
+       WHERE reason = @reason AND resolved_at IS NULL`,
+      { reason: params.delayReason },
+    );
+    if (delayRows.length === 0) {
+      noMatch = true;
+    } else {
+      const delayNos = delayRows.map((r) => r.equ_no);
+      const { sql: inSql, params: inParams } = inClause(delayNos, 'd');
+      conditions.push(`equ_no IN (${inSql})`);
+      Object.assign(values, inParams);
+    }
+  }
+  const whereSql = noMatch ? 'WHERE 1=0' : conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const totalRows = await query(`SELECT COUNT(*) AS total FROM eqm_mnt ${whereSql}`, values);
+  let dueNoMatch = false;
+  let dueFilteredIds = null;
+  if (DUE_FILTERS.includes(params.due)) {
+    const baseRows = await query(
+      `SELECT id, use_date, max_mt_date, maintenance_type FROM eqm_mnt ${whereSql}`,
+      values,
+    );
+    const matched = [];
+    for (const row of baseRows) {
+      const nextDue = holidayService.getAdjustedDueDay({
+        startDate: row.use_date,
+        lastMaintenanceDate: row.max_mt_date,
+        maintenanceCycle: row.maintenance_type,
+      });
+      const diffDays = daysBetween(today, nextDue);
+      const category =
+        diffDays < 0
+          ? 'overdue'
+          : diffDays === 0
+            ? 'today'
+            : diffDays === 1
+              ? 'tomorrow'
+              : 'normal';
+      if (category === params.due) matched.push(row.id);
+    }
+    if (matched.length === 0) {
+      dueNoMatch = true;
+    } else {
+      dueFilteredIds = matched;
+    }
+  }
+
+  const finalNoMatch = noMatch || dueNoMatch;
+  const finalConditions = [...conditions];
+  if (dueFilteredIds) {
+    const { sql: inSql, params: inParams } = inClause(dueFilteredIds, 'f');
+    finalConditions.push(`id IN (${inSql})`);
+    Object.assign(values, inParams);
+  }
+  const finalWhere = finalNoMatch
+    ? 'WHERE 1=0'
+    : finalConditions.length > 0
+      ? `WHERE ${finalConditions.join(' AND ')}`
+      : '';
+
+  const totalRows = await query(`SELECT COUNT(*) AS total FROM eqm_mnt ${finalWhere}`, values);
   const total = totalRows[0] ? totalRows[0].total : 0;
 
   values.offset = (params.page - 1) * params.pageSize;
@@ -231,7 +297,7 @@ async function getEquipmentStatistics(params) {
     `SELECT id, equ_no, equ_name, equ_type, equ_type_desc, equ_addr,
       maintainer_emp_no, approver_emp_no, temp_maintainer_emp_no,
       maintenance_type, maintenance_status, use_date, max_mt_date, mnt_dept_no
-     FROM eqm_mnt ${whereSql}
+     FROM eqm_mnt ${finalWhere}
      ORDER BY mnt_dept_no DESC, equ_type ASC, equ_no ASC
      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     values,
