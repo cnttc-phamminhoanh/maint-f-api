@@ -31,6 +31,7 @@ router.get(
       page: pageSchema,
       pageSize: pageSizeSchema(100),
       scope: Joi.string().valid('mine', 'department').optional(),
+      approvalOnly: Joi.string().valid('1').optional(),
     }),
     'query',
   ),

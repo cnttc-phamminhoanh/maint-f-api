@@ -1,9 +1,9 @@
-const { Router } = require('express');
+const express = require('express');
 const Joi = require('joi');
 const holidayService = require('../services/holiday.service');
 const { ApiError } = require('../errors');
 
-const router = Router();
+const router = express.Router();
 
 // Chỉ HR và admin mới được thêm/xóa ngày nghỉ; các vị trí khác chỉ đọc.
 function requireHolidayManager(req, res, next) {

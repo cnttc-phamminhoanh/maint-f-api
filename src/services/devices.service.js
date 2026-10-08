@@ -189,6 +189,16 @@ async function getDeviceById(id) {
 // ==== Danh sach thiet bi ====
 
 function buildScopeCondition(params, caller, values, _today) {
+  if (params.approvalOnly) {
+    if (caller.position === 'chu_quan' && caller.departmentId) {
+      values.callerDept = caller.departmentId;
+      return [
+        'd.maintenance_status = \'pending_approval\'',
+        'd.mnt_dept_no = @callerDept',
+      ];
+    }
+    return null;
+  }
   if (params.scope === 'mine') {
     values.callerEmpNo = caller.empNo;
     return ['d.maintainer_emp_no = @callerEmpNo'];
@@ -630,6 +640,15 @@ async function submitApproval(id, userId, itemIds) {
   return { success: true };
 }
 
+// Chu quan duyet thiet bi pending_approval trong phong ban minh
+function isDeptApprovalAllowed(requester, row) {
+  return (
+    requester.position === 'chu_quan' &&
+    Boolean(requester.mnt_dept_no) &&
+    row.mnt_dept_no === requester.mnt_dept_no
+  );
+}
+
 async function approveCompletion(id, userId) {
   const requester = await resolveUser(userId);
   if (!requester) throw new ApiError(404, 'User not found');
@@ -638,7 +657,8 @@ async function approveCompletion(id, userId) {
   const today = businessToday();
   const isOwner = row.approver_emp_no === requester.emp_no;
   const isMaintainer = effectiveMaintainerEmpNo(row, today) === requester.emp_no;
-  if (!isOwner && !isMaintainer) throw new ApiError(403, 'not allowed');
+  const isDeptManager = isDeptApprovalAllowed(requester, row);
+  if (!isOwner && !isMaintainer && !isDeptManager) throw new ApiError(403, 'not allowed');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -670,7 +690,10 @@ async function rejectCompletion(id, userId, reason) {
   if (!requester) throw new ApiError(404, 'User not found');
   const row = await getDeviceRow(id);
   if (!row) throw new ApiError(404, 'Device not found');
-  if (row.approver_emp_no !== requester.emp_no) throw new ApiError(403, 'not owner');
+  const isDeptManager = isDeptApprovalAllowed(requester, row);
+  if (row.approver_emp_no !== requester.emp_no && !isDeptManager) {
+    throw new ApiError(403, 'not owner');
+  }
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -690,11 +713,13 @@ async function bulkApproveCompletion(ids, userId) {
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
   const today = businessToday();
   const { sql: inSql, params } = inClause(ids, 'id');
+  const canDept = requester.position === 'chu_quan' && Boolean(requester.mnt_dept_no);
+  const deptOr = canDept ? ' OR d.mnt_dept_no = @dept' : '';
   const rows = await query(
     `SELECT ${DEVICE_SELECT} FROM eqm_mnt d
      WHERE d.id IN (${inSql}) AND d.maintenance_status = 'pending_approval'
-       AND d.approver_emp_no = @emp`,
-    { ...params, emp: requester.emp_no },
+       AND (d.approver_emp_no = @emp${deptOr})`,
+    { ...params, emp: requester.emp_no, ...(canDept ? { dept: requester.mnt_dept_no } : {}) },
   );
   if (rows.length === 0) return { success: true, processed: 0 };
   await withTransaction(async (tx) => {
@@ -729,13 +754,15 @@ async function bulkRejectCompletion(ids, userId, reason) {
   if (!requester) throw new ApiError(404, 'User not found');
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
   const { sql: inSql, params } = inClause(ids, 'id');
+  const canDept = requester.position === 'chu_quan' && Boolean(requester.mnt_dept_no);
+  const deptOr = canDept ? ' OR mnt_dept_no = @dept' : '';
   const updated = await query(
     `UPDATE eqm_mnt SET maintenance_status = 'rejected', rejection_reason = @reason,
       completion_requested_at = NULL, approver_emp_no = @approver${touchSuffix()}
      OUTPUT inserted.id
      WHERE id IN (${inSql}) AND maintenance_status = 'pending_approval'
-       AND approver_emp_no = @approver`,
-    { ...params, reason, approver: requester.emp_no },
+       AND (approver_emp_no = @approver${deptOr})`,
+    { ...params, reason, approver: requester.emp_no, ...(canDept ? { dept: requester.mnt_dept_no } : {}) },
   );
   return { success: true, processed: updated.length };
 }
