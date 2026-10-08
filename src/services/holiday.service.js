@@ -6,7 +6,7 @@
 
 const { query } = require('../db');
 const { ApiError } = require('../errors');
-const { addDays, getNextDueDay } = require('../utils/dates');
+const { addDays, fmtDate, getNextDueDay } = require('../utils/dates');
 
 const TTL_MS = 10 * 60 * 1000;
 const FAIL_RETRY_MS = 60 * 1000;
@@ -61,13 +61,8 @@ function holidaySqlEnabled() {
 
 async function loadHolidays() {
   const rows = await query('SELECT holiday_date FROM hr_holiday');
-  holidaySet = new Set(
-    rows.map((r) => {
-      const v = r.holiday_date;
-      if (typeof v === 'string') return v.slice(0, 10);
-      return v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
-    }),
-  );
+  // fmtDate: lay ngay theo gio HK, khong dung toISOString (UTC lui 1 ngay)
+  holidaySet = new Set(rows.map((r) => fmtDate(r.holiday_date)));
 }
 
 // Load cache ngày nghỉ; lỗi (chưa tạo bảng) thì dùng Set rỗng, tự thử lại sau.
@@ -107,7 +102,7 @@ async function listHolidays(year) {
     year ? { year } : undefined,
   );
   return rows.map((r) => ({
-    date: typeof r.holiday_date === 'string' ? r.holiday_date.slice(0, 10) : new Date(r.holiday_date).toISOString().slice(0, 10),
+    date: fmtDate(r.holiday_date),
     name: r.holiday_name || '',
   }));
 }
