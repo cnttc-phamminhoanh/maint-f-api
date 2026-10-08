@@ -61,6 +61,8 @@ const STATUS_ENUM = ['needs_maintenance', 'in_maintenance', 'pending_approval', 
 const SHOW_MAINTAINER_POSITIONS = ['admin', 'chu_quan', 'nhan_vien_bao_tri', 'van_thu'];
 // Vi tri co trang chu la danh sach thiet bi phong ban (FE luon goi scope=department)
 const DEPT_HOME_POSITIONS = ['nhan_vien_bao_tri', 'chu_quan', 'van_thu'];
+// Vi tri duoc duyet/tu choi thiet bi pending_approval trong bo phan minh
+const DEPT_APPROVAL_POSITIONS = ['chu_quan', 'van_thu'];
 
 function touchSuffix() {
   return config.updatedAtCol ? `, ${config.updatedAtCol} = GETDATE()` : '';
@@ -190,7 +192,7 @@ async function getDeviceById(id) {
 
 function buildScopeCondition(params, caller, values, _today) {
   if (params.approvalOnly) {
-    if (caller.position === 'chu_quan' && caller.departmentId) {
+    if (DEPT_APPROVAL_POSITIONS.includes(caller.position) && caller.departmentId) {
       values.callerDept = caller.departmentId;
       return [
         'd.maintenance_status = \'pending_approval\'',
@@ -643,7 +645,7 @@ async function submitApproval(id, userId, itemIds) {
 // Chu quan duyet thiet bi pending_approval trong phong ban minh
 function isDeptApprovalAllowed(requester, row) {
   return (
-    requester.position === 'chu_quan' &&
+    DEPT_APPROVAL_POSITIONS.includes(requester.position) &&
     Boolean(requester.mnt_dept_no) &&
     row.mnt_dept_no === requester.mnt_dept_no
   );
@@ -713,7 +715,7 @@ async function bulkApproveCompletion(ids, userId) {
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
   const today = businessToday();
   const { sql: inSql, params } = inClause(ids, 'id');
-  const canDept = requester.position === 'chu_quan' && Boolean(requester.mnt_dept_no);
+  const canDept = DEPT_APPROVAL_POSITIONS.includes(requester.position) && Boolean(requester.mnt_dept_no);
   const deptOr = canDept ? ' OR d.mnt_dept_no = @dept' : '';
   const rows = await query(
     `SELECT ${DEVICE_SELECT} FROM eqm_mnt d
@@ -754,7 +756,7 @@ async function bulkRejectCompletion(ids, userId, reason) {
   if (!requester) throw new ApiError(404, 'User not found');
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
   const { sql: inSql, params } = inClause(ids, 'id');
-  const canDept = requester.position === 'chu_quan' && Boolean(requester.mnt_dept_no);
+  const canDept = DEPT_APPROVAL_POSITIONS.includes(requester.position) && Boolean(requester.mnt_dept_no);
   const deptOr = canDept ? ' OR mnt_dept_no = @dept' : '';
   const updated = await query(
     `UPDATE eqm_mnt SET maintenance_status = 'rejected', rejection_reason = @reason,
