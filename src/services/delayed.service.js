@@ -1,11 +1,11 @@
 const { query, withTransaction, txQuery, inClause } = require('../db');
+const holidayService = require('./holiday.service');
 const { assertAdmin, getCaller } = require('../utils/auth');
 const {
   businessToday,
   fmtDate,
   toIso,
   hkDateStr,
-  getNextDueDay,
   daysBetween,
   addDays,
   effectiveMaintainerEmpNo,
@@ -43,6 +43,7 @@ function responsibleEmpNo(status, device) {
 
 // Tinh danh sach thiet bi hien dang tre han (moi thiet bi 1 reason duy nhat)
 async function computeCurrentDelayed() {
+  await holidayService.ensureHolidaysLoaded();
   const rows = await query(
     `SELECT equ_no, equ_name, use_date, max_mt_date, maintenance_type,
             maintenance_status, maintainer_emp_no, temp_maintainer_emp_no,
@@ -52,7 +53,7 @@ async function computeCurrentDelayed() {
   const today = businessToday();
   const current = new Map();
   for (const row of rows) {
-    const due = getNextDueDay({
+    const due = holidayService.getAdjustedDueDay({
       lastMaintenanceDate: row.max_mt_date,
       startDate: row.use_date,
       maintenanceCycle: row.maintenance_type,
@@ -282,6 +283,7 @@ async function fetchDeptNameMap(deptNos) {
 }
 
 async function queryList(reason, page, pageSize) {
+  await holidayService.ensureHolidaysLoaded();
   const where = ['resolved_at IS NULL'];
   const params = { page, pageSize };
   if (reason) {
@@ -365,7 +367,7 @@ async function queryList(reason, page, pageSize) {
     const storedDue = fmtDate(r.next_due_date);
     const liveDue = r.resolved_at
       ? null
-      : getNextDueDay({
+      : holidayService.getAdjustedDueDay({
         lastMaintenanceDate: r.max_mt_date,
         startDate: r.use_date,
         maintenanceCycle: r.e_maintenance_type || r.maintenance_type,
@@ -425,6 +427,7 @@ async function adminSync(userId) {
 // Lich su tre han (public, trang BI): toan bo episode ke ca da giai quyet
 // days_overdue & ten thiet bi tinh/lay tu eqm_mnt luc doc, ko can sync
 async function getDelayHistory(dept, page, pageSize) {
+  await holidayService.ensureHolidaysLoaded();
   const where = [];
   const params = { offset: (page - 1) * pageSize, pageSize };
   if (dept) {
@@ -469,7 +472,7 @@ async function getDelayHistory(dept, page, pageSize) {
     const storedDue = fmtDate(r.next_due_date);
     const liveDue = r.resolved_at
       ? null
-      : getNextDueDay({
+      : holidayService.getAdjustedDueDay({
         lastMaintenanceDate: r.max_mt_date,
         startDate: r.use_date,
         maintenanceCycle: r.e_maintenance_type || r.maintenance_type,

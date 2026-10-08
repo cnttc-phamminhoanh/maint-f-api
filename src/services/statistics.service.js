@@ -1,12 +1,12 @@
 const { query, inClause } = require('../db');
 const {
   businessToday,
-  getNextDueDay,
   daysBetween,
   addDays,
   effectiveStatus,
 } = require('../utils/dates');
 const { queryList, buildDeptHistory, buildDeptTrend, getDelayHistory } = require('./delayed.service');
+const holidayService = require('./holiday.service');
 
 const ALL_STATUSES = [
   'needs_maintenance',
@@ -25,6 +25,7 @@ const CYCLE_LABEL_MAP = {
 };
 
 async function getOverview() {
+  await holidayService.ensureHolidaysLoaded();
   const today = businessToday();
   const rows = await query(
     'SELECT use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no FROM eqm_mnt',
@@ -44,7 +45,8 @@ async function getOverview() {
       maintenanceCycle: row.maintenance_type,
       maintenanceStatus: row.maintenance_status,
     };
-    const displayStatus = effectiveStatus(device, today);
+    const nextDue = holidayService.getAdjustedDueDay(device);
+    const displayStatus = effectiveStatus(device, today, nextDue);
     statusMap.set(displayStatus, (statusMap.get(displayStatus) || 0) + 1);
 
     const cycle = ALL_CYCLES.includes(row.maintenance_type) ? row.maintenance_type : '1_month';
@@ -57,7 +59,6 @@ async function getOverview() {
 
     if (row.mnt_dept_no) {
       deptDeviceMap.set(row.mnt_dept_no, (deptDeviceMap.get(row.mnt_dept_no) || 0) + 1);
-      const nextDue = getNextDueDay(device);
       const diffDays = daysBetween(today, nextDue);
       const prev = deptDueMap.get(row.mnt_dept_no) || { today: 0, tomorrow: 0, normal: 0, overdue: 0, total: 0 };
       prev.total += 1;
@@ -195,6 +196,7 @@ async function getDelayedStatistics(reason, page, pageSize) {
 }
 
 async function getEquipmentStatistics(params) {
+  await holidayService.ensureHolidaysLoaded();
   const today = businessToday();
   const conditions = [];
   const values = {};
@@ -256,7 +258,7 @@ async function getEquipmentStatistics(params) {
       maintenanceCycle: row.maintenance_type,
       maintenanceStatus: row.maintenance_status,
     };
-    const nextDue = getNextDueDay(device);
+    const nextDue = holidayService.getAdjustedDueDay(device);
     const daysOverdue = Math.max(0, -daysBetween(today, nextDue));
     const activeEmpNo =
       row.maintenance_status === 'in_maintenance' ||

@@ -19,6 +19,8 @@ const devicesRoutes = require('./routes/devices.routes');
 const ordersRoutes = require('./routes/maintenance-orders.routes');
 const delayedRoutes = require('./routes/delayed.routes');
 const statisticsRoutes = require('./routes/statistics.routes');
+const holidayRoutes = require('./routes/holiday.routes');
+const holidayService = require('./services/holiday.service');
 
 const app = express();
 
@@ -46,6 +48,7 @@ app.use(assertSameUser);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/maintenance-orders', ordersRoutes);
 app.use('/api/delayed-devices', delayedRoutes);
+app.use('/api/holidays', holidayRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -53,6 +56,7 @@ app.use(errorHandler);
 async function start() {
   try {
     await connectDb();
+    await holidayService.detectHolidaySupport();
   } catch (err) {
     console.error('[FATAL] Không kết nối được SQL Server:', err.message);
     process.exit(1);

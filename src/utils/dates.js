@@ -77,16 +77,18 @@ function getNextDueDay(device) {
 }
 
 // Trang thai hien thi: giu nguyen 3 trang thai dac biet, con lai suy ra tu han bao tri
-function effectiveStatus(row, today) {
+function effectiveStatus(row, today, nextDueOverride) {
   const raw = row.maintenanceStatus || row.maintenance_status;
   if (raw === 'in_maintenance' || raw === 'pending_approval' || raw === 'rejected') {
     return raw;
   }
-  const nextDue = getNextDueDay({
-    startDate: row.startDate || row.use_date,
-    lastMaintenanceDate: row.lastMaintenanceDate || row.max_mt_date,
-    maintenanceCycle: row.maintenanceCycle || row.maintenance_type,
-  });
+  const nextDue = nextDueOverride !== undefined
+    ? nextDueOverride
+    : getNextDueDay({
+      startDate: row.startDate || row.use_date,
+      lastMaintenanceDate: row.lastMaintenanceDate || row.max_mt_date,
+      maintenanceCycle: row.maintenanceCycle || row.maintenance_type,
+    });
   if (!nextDue) return 'not_due';
   return nextDue <= today ? 'needs_maintenance' : 'not_due';
 }

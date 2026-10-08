@@ -18,15 +18,24 @@ const {
   effectiveMaintainerEmpNo,
 } = require('../utils/dates');
 const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order.service');
+const holidayService = require('./holiday.service');
 
-// bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1)
-const NEXT_DUE_SQL = `CAST(CASE
+// bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1).
+// 2026-10-07: boc them fn_shift_due de doi ngay han qua ngay nghi (chu nhat + hr_holiday)
+// khi function da duoc tao (sql/003_hr_holiday.sql).
+const NEXT_DUE_BASE_SQL = `CAST(CASE
   WHEN d.maintenance_type = '1_week' THEN DATEADD(day, 7, ISNULL(d.max_mt_date, d.use_date))
   WHEN d.maintenance_type IN ('2_weeks','2_week') THEN DATEADD(day, 14, ISNULL(d.max_mt_date, d.use_date))
   WHEN d.maintenance_type = '1_month' THEN DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
   WHEN d.maintenance_type = '1_year' THEN DATEADD(year, 1, ISNULL(d.max_mt_date, d.use_date))
   ELSE DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
 END AS date)`;
+
+function nextDueSql() {
+  return holidayService.holidaySqlEnabled()
+    ? `dbo.fn_shift_due(${NEXT_DUE_BASE_SQL})`
+    : NEXT_DUE_BASE_SQL;
+}
 
 const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
   d.maintenance_type, d.maintenance_status, d.completion_requested_at, d.rejection_reason,
@@ -63,7 +72,7 @@ function orderByDeviceList(_today) {
       WHEN d.maintenance_status = 'in_maintenance' THEN 1
       WHEN d.maintenance_status = 'pending_approval' THEN 2
       WHEN d.maintenance_status = 'rejected' THEN 3
-      WHEN ${NEXT_DUE_SQL} <= @today THEN 4
+      WHEN ${nextDueSql()} <= @today THEN 4
       ELSE 5
     END ASC`,
   ];
@@ -72,7 +81,7 @@ function orderByDeviceList(_today) {
       `CASE WHEN d.maintenance_status = 'in_maintenance' THEN d.${config.updatedAtCol} END DESC`,
     );
   }
-  parts.push(`${NEXT_DUE_SQL} ASC`, 'd.equ_no ASC');
+  parts.push(`${nextDueSql()} ASC`, 'd.equ_no ASC');
   return parts.join(', ');
 }
 
@@ -93,6 +102,13 @@ function toDeviceRecord(row, empNameMap, today) {
   const effectiveId = effectiveMaintainerEmpNo(row, today);
   const maintainerId = row.maintainer_emp_no || '';
   const managerId = row.approver_emp_no || '';
+  const adjustedDue = holidayService.shiftPastHolidays(
+    getNextDueDay({
+      startDate: row.use_date,
+      lastMaintenanceDate: row.max_mt_date,
+      maintenanceCycle: row.maintenance_type,
+    }),
+  );
   const status = effectiveStatus(
     {
       maintenanceStatus: row.maintenance_status,
@@ -101,6 +117,7 @@ function toDeviceRecord(row, empNameMap, today) {
       maintenanceCycle: row.maintenance_type,
     },
     today,
+    adjustedDue,
   );
   const showMaintenanceBy = ['in_maintenance', 'pending_approval', 'rejected'].includes(status);
   return {
@@ -133,6 +150,7 @@ function toDeviceRecord(row, empNameMap, today) {
 }
 
 async function enrichRecords(rows, today) {
+  await holidayService.ensureHolidaysLoaded();
   const empNos = [];
   for (const row of rows) {
     const effective = effectiveMaintainerEmpNo(row, today);
@@ -259,10 +277,10 @@ async function listDevices(params) {
   // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
   const countRows = await query(
     `SELECT COUNT(*) AS total,
-      ISNULL(SUM(CASE WHEN ${NEXT_DUE_SQL} < @today THEN 1 ELSE 0 END), 0) AS overdue,
-      ISNULL(SUM(CASE WHEN ${NEXT_DUE_SQL} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
-      ISNULL(SUM(CASE WHEN ${NEXT_DUE_SQL} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
-      ISNULL(SUM(CASE WHEN ${NEXT_DUE_SQL} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today THEN 1 ELSE 0 END), 0) AS overdue,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'needs_maintenance' THEN 1 ELSE 0 END), 0) AS stNeeds,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'in_maintenance' THEN 1 ELSE 0 END), 0) AS stInMaint,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'pending_approval' THEN 1 ELSE 0 END), 0) AS stPending,
@@ -292,10 +310,10 @@ async function listDevices(params) {
     }
   }
   if (params.due && params.due !== 'all') {
-    if (params.due === 'overdue') finalCond.push(`${NEXT_DUE_SQL} < @today`);
-    else if (params.due === 'today') finalCond.push(`${NEXT_DUE_SQL} = @today`);
-    else if (params.due === 'tomorrow') finalCond.push(`${NEXT_DUE_SQL} = @tomorrow`);
-    else if (params.due === 'later') finalCond.push(`${NEXT_DUE_SQL} > @tomorrow`);
+    if (params.due === 'overdue') finalCond.push(`${nextDueSql()} < @today`);
+    else if (params.due === 'today') finalCond.push(`${nextDueSql()} = @today`);
+    else if (params.due === 'tomorrow') finalCond.push(`${nextDueSql()} = @tomorrow`);
+    else if (params.due === 'later') finalCond.push(`${nextDueSql()} > @tomorrow`);
   }
   const finalWhere = finalCond.length > 0 ? `WHERE ${finalCond.join(' AND ')}` : '';
 
@@ -367,7 +385,7 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
   const orderSql =
     sortBy === 'name'
       ? 'd.equ_name ASC, d.equ_no ASC'
-      : `${NEXT_DUE_SQL} ASC, d.equ_name ASC, d.equ_no ASC`;
+      : `${nextDueSql()} ASC, d.equ_name ASC, d.equ_no ASC`;
   values.offset = (page - 1) * pageSize;
   values.pageSize = pageSize;
   values.today = today;
@@ -795,11 +813,11 @@ async function undoMaintenance(id, userId) {
   if (caller.empNo !== scannerId && !isDeptManager) {
     throw new ApiError(403, 'Only the maintenance staff or department manager can undo');
   }
-  const nextDue = getNextDueDay({
+  const nextDue = holidayService.shiftPastHolidays(getNextDueDay({
     startDate: row.use_date,
     lastMaintenanceDate: row.max_mt_date,
     maintenanceCycle: row.maintenance_type,
-  });
+  }));
   const newStatus = nextDue && nextDue <= today ? 'needs_maintenance' : 'not_due';
   const updated = await query(
     `UPDATE eqm_mnt SET maintenance_status = @status,
