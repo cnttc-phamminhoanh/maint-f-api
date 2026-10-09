@@ -289,7 +289,7 @@ async function listDevices(params) {
   // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
   const countRows = await query(
     `SELECT COUNT(*) AS total,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today THEN 1 ELSE 0 END), 0) AS overdue,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval' THEN 1 ELSE 0 END), 0) AS overdue,
       ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
       ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
       ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
@@ -322,7 +322,8 @@ async function listDevices(params) {
     }
   }
   if (params.due && params.due !== 'all') {
-    if (params.due === 'overdue') finalCond.push(`${nextDueSql()} < @today`);
+    // pending khong hien o tab Tre han ben bao tri (BI/admin van dem khi qua an han)
+    if (params.due === 'overdue') finalCond.push(`${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval'`);
     else if (params.due === 'today') finalCond.push(`${nextDueSql()} = @today`);
     else if (params.due === 'tomorrow') finalCond.push(`${nextDueSql()} = @tomorrow`);
     else if (params.due === 'later') finalCond.push(`${nextDueSql()} > @tomorrow`);
@@ -538,11 +539,12 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
     `INSERT INTO eqm_mt1 (sheet_no, sheet_type, sheet_date, dept_no, emp_no, mt_flag,
       equ_no, rem, create_date, check_date, create_user, check_user, sheet_sta, check_sta,
       user_list, cur_check_user)
-    VALUES (@sheetNo, 'EMGIA', @sheetDate, NULL, @empNo, @mtFlag, @equNo, NULL,
-      GETDATE(), NULL, @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
+    VALUES (@sheetNo, 'EMGIA', @sheetDate, @deptNo, @empNo, @mtFlag, @equNo, NULL,
+      GETDATE(), GETDATE(), @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
     {
       sheetNo,
       sheetDate,
+      deptNo: row.mnt_dept_no || null,
       empNo: maintainerEmpNo,
       mtFlag: cycleToMtFlag(row.maintenance_type),
       equNo: row.equ_no,
@@ -677,11 +679,15 @@ async function approveCompletion(id, userId) {
        WHERE id = @id`,
       { today, approver: requester.emp_no, id },
     );
+    // episode do dong tai thoi diem gui xet duyet (cong nhan NV da lam xong),
+    // episode vang (cho duyet) dong tai thoi diem duyet. 2026-10-09
     await txQuery(
       tx,
-      `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
+      `UPDATE eqm_mnt_delay
+       SET resolved_at = CASE WHEN reason = 'awaiting_approval' THEN GETDATE()
+                              ELSE ISNULL(@reqAt, GETDATE()) END
        WHERE equ_no = @equNo AND resolved_at IS NULL`,
-      { equNo: row.equ_no },
+      { equNo: row.equ_no, reqAt: row.completion_requested_at || null },
     );
   });
   return { success: true };
@@ -738,13 +744,14 @@ async function bulkApproveCompletion(ids, userId) {
        WHERE id IN (${upIn})`,
       { ...upParams, today, approver: requester.emp_no },
     );
-    const eqNos = Array.from(new Set(rows.map((r) => r.equ_no)));
-    for (const equNo of eqNos) {
+    for (const r of rows) {
       await txQuery(
         tx,
-        `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
+        `UPDATE eqm_mnt_delay
+         SET resolved_at = CASE WHEN reason = 'awaiting_approval' THEN GETDATE()
+                                ELSE ISNULL(@reqAt, GETDATE()) END
          WHERE equ_no = @equNo AND resolved_at IS NULL`,
-        { equNo },
+        { equNo: r.equ_no, reqAt: r.completion_requested_at || null },
       );
     }
   });

@@ -29,25 +29,31 @@ function reasonForStatus(status) {
   }
 }
 
-function responsibleEmpNo(status, device) {
-  switch (status) {
-  case 'pending_approval':
-    return device.approver_emp_no || null;
-  case 'in_maintenance':
-  case 'rejected':
-    return effectiveMaintainerEmpNo(device);
-  default:
-    return device.maintainer_emp_no || null;
-  }
+// Episode do (employee) cua thiet bi dang cho duyet = "treo": van mo trong DB
+// nhung an khoi moi view cho den khi duyet (dong) hoac tu choi (tiep tuc). 2026-10-09.
+const SUSPENDED_EPISODE_SQL = `NOT EXISTS (
+  SELECT 1 FROM eqm_mnt m
+  WHERE m.equ_no = d.equ_no
+    AND d.resolved_at IS NULL
+    AND d.reason <> 'awaiting_approval'
+    AND m.maintenance_status = 'pending_approval')`;
+
+function responsibleForReason(reason, device) {
+  if (reason === 'not_started') return device.maintainer_emp_no || null;
+  return effectiveMaintainerEmpNo(device);
 }
 
-// Tinh danh sach thiet bi hien dang tre han (moi thiet bi 1 reason duy nhat)
+// Moi thiet bi qua han = 1 entry day du cho runSync (2026-10-09):
+// - pending_approval: episode do (employee) "treo" (ko dong/ko cap nhat/an view);
+//   episode vang (awaiting) chi mo khi qua an han = awaitingStart.
+// - khac: episode do hoat dong binh thuong voi employeeReason.
 async function computeCurrentDelayed() {
   await holidayService.ensureHolidaysLoaded();
   const rows = await query(
     `SELECT equ_no, equ_name, use_date, max_mt_date, maintenance_type,
             maintenance_status, maintainer_emp_no, temp_maintainer_emp_no,
-            temp_maintainer_date, approver_emp_no, mnt_dept_no
+            temp_maintainer_date, approver_emp_no, mnt_dept_no,
+            completion_requested_at
      FROM eqm_mnt`,
   );
   const today = businessToday();
@@ -60,45 +66,89 @@ async function computeCurrentDelayed() {
     });
     if (!due || daysBetween(today, due) >= 0) continue;
     const status = row.maintenance_status || 'not_due';
+    const pending = status === 'pending_approval';
+    let awaitingStart = null;
+    if (pending) {
+      // An han cho duyet: nguoi duyet co them 1 ngay lam viec ke tu ngay muon hon
+      // giua (han, ngay gui xet duyet), nhay qua Chu nhat + ngay le hr_holiday.
+      const submitDay = hkDateStr(row.completion_requested_at);
+      const anchor = submitDay && submitDay > due ? submitDay : due;
+      const graceEnd = holidayService.shiftPastHolidays(addDays(anchor, 1));
+      if (daysBetween(today, graceEnd) < 0) awaitingStart = addDays(graceEnd, 1);
+    }
+    const employeeReason = pending ? null : reasonForStatus(status);
     current.set(row.equ_no, {
       equNo: row.equ_no,
       equName: row.equ_name || null,
-      reason: reasonForStatus(status),
       nextDueDate: due,
       daysOverdue: daysBetween(due, today),
       maxMtDate: row.max_mt_date ? fmtDate(row.max_mt_date) : null,
       maintenanceType: row.maintenance_type || '1_month',
       maintainerEmpNo: row.maintainer_emp_no || null,
-      responsibleEmpNo: responsibleEmpNo(status, row),
       mntDeptNo: row.mnt_dept_no || null,
+      pending,
+      employeeReason,
+      employeeResponsible: employeeReason
+        ? responsibleForReason(employeeReason, row)
+        : null,
+      approverResponsible: row.approver_emp_no || null,
+      awaitingStart,
+      employeeOccurredAt: addDays(due, 1),
     });
   }
   return current;
 }
 
-// Doi soat episode trong transaction: dong episode da het tre,
-// cap nhat episode con mo, mo episode moi cho thiet bi moi tre han
+// Doi soat episode trong transaction (2026-10-09):
+// - thiet bi pending: episode do giu "treo" (ko dong/ko cap nhat); episode vang
+//   chi mo/cap nhat khi qua an han (awaitingStart); chua qua an han ma con dong
+//   vang thi dong (chot cac dong ghi som truoc 10-09).
+// - thiet bi khac pending: episode vang dong; episode do cap nhat tai cho
+//   (doi reason not_started/in_progress/rejected, giu occurred_at = lien mach);
+//   chua co thi mo moi.
+// - thiet bi het tre han: dong moi episode con mo.
 async function runSync() {
   const current = await computeCurrentDelayed();
   const openRows = await query(
     'SELECT id, equ_no, reason FROM eqm_mnt_delay WHERE resolved_at IS NULL',
   );
+  const openByEqu = new Map();
+  for (const ep of openRows) {
+    const slot = openByEqu.get(ep.equ_no) || {};
+    if (ep.reason === 'awaiting_approval') slot.awaiting = ep;
+    else slot.emp = ep;
+    openByEqu.set(ep.equ_no, slot);
+  }
 
   const resolveIds = [];
-  const updates = [];
-  const openEquNos = new Set();
-  for (const ep of openRows) {
-    const cur = current.get(ep.equ_no);
-    if (!cur || cur.reason !== ep.reason) {
-      resolveIds.push(ep.id);
-      continue;
-    }
-    openEquNos.add(ep.equ_no);
-    updates.push({ id: ep.id, v: cur });
-  }
+  const empUpdates = [];
+  const awUpdates = [];
   const inserts = [];
   for (const cur of current.values()) {
-    if (!openEquNos.has(cur.equNo)) inserts.push(cur);
+    const slot = openByEqu.get(cur.equNo) || {};
+    if (cur.pending) {
+      if (cur.awaitingStart) {
+        if (slot.awaiting) awUpdates.push({ id: slot.awaiting.id, v: cur });
+        else {
+          inserts.push(
+            buildRow(cur, 'awaiting_approval', cur.awaitingStart, cur.approverResponsible),
+          );
+        }
+      } else if (slot.awaiting) {
+        resolveIds.push(slot.awaiting.id);
+      }
+    } else {
+      if (slot.awaiting) resolveIds.push(slot.awaiting.id);
+      if (slot.emp) empUpdates.push({ id: slot.emp.id, v: cur });
+      else {
+        inserts.push(
+          buildRow(cur, cur.employeeReason, cur.employeeOccurredAt, cur.employeeResponsible),
+        );
+      }
+    }
+  }
+  for (const ep of openRows) {
+    if (!current.has(ep.equ_no)) resolveIds.push(ep.id);
   }
 
   await withTransaction(async (tx) => {
@@ -111,7 +161,7 @@ async function runSync() {
         params,
       );
     }
-    for (const u of updates) {
+    for (const u of empUpdates) {
       await txQuery(
         tx,
         `UPDATE eqm_mnt_delay
@@ -122,18 +172,40 @@ async function runSync() {
         {
           id: u.id,
           n: u.v.equName,
-          r: u.v.reason,
+          r: u.v.employeeReason,
           d: u.v.nextDueDate,
           o: u.v.daysOverdue,
           max: u.v.maxMtDate,
           t: u.v.maintenanceType,
           dept: u.v.mntDeptNo,
           m: u.v.maintainerEmpNo,
-          resp: u.v.responsibleEmpNo,
+          resp: u.v.employeeResponsible,
         },
       );
     }
-    // 11 param/dong -> CHUNK 150 = 1650 param, duoi gioi han 2100 cua SQL Server
+    for (const u of awUpdates) {
+      await txQuery(
+        tx,
+        `UPDATE eqm_mnt_delay
+         SET equ_name = @n, next_due_date = @d, days_overdue = @o,
+             max_mt_date = @max, maintenance_type = @t, mnt_dept_no = @dept,
+             maintainer_emp_no = @m, responsible_emp_no = @resp, occurred_at = @occ
+         WHERE id = @id`,
+        {
+          id: u.id,
+          n: u.v.equName,
+          d: u.v.nextDueDate,
+          o: u.v.daysOverdue,
+          max: u.v.maxMtDate,
+          t: u.v.maintenanceType,
+          dept: u.v.mntDeptNo,
+          m: u.v.maintainerEmpNo,
+          resp: u.v.approverResponsible,
+          occ: u.v.awaitingStart,
+        },
+      );
+    }
+    // 12 param/dong -> CHUNK 150 = 1800 param, duoi gioi han 2100 cua SQL Server
     const CHUNK = 150;
     for (let i = 0; i < inserts.length; i += CHUNK) {
       const chunk = inserts.slice(i, i + CHUNK);
@@ -147,7 +219,7 @@ async function runSync() {
         params[`${p}reason`] = d.reason;
         params[`${p}due`] = d.nextDueDate;
         params[`${p}over`] = d.daysOverdue;
-        params[`${p}occ`] = addDays(d.nextDueDate, 1);
+        params[`${p}occ`] = d.occurredAt;
         params[`${p}max`] = d.maxMtDate;
         params[`${p}type`] = d.maintenanceType;
         params[`${p}mnt`] = d.maintainerEmpNo;
@@ -165,7 +237,26 @@ async function runSync() {
     }
   });
 
-  return { total: updates.length + inserts.length, syncedAt: new Date().toISOString() };
+  return {
+    total: empUpdates.length + awUpdates.length + inserts.length,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+function buildRow(cur, reason, occurredAt, responsibleEmpNo) {
+  return {
+    equNo: cur.equNo,
+    equName: cur.equName,
+    nextDueDate: cur.nextDueDate,
+    daysOverdue: cur.daysOverdue,
+    maxMtDate: cur.maxMtDate,
+    maintenanceType: cur.maintenanceType,
+    maintainerEmpNo: cur.maintainerEmpNo,
+    mntDeptNo: cur.mntDeptNo,
+    reason,
+    occurredAt,
+    responsibleEmpNo,
+  };
 }
 
 // Lich su theo bo phan: tong so lan tre (toan bo episode) + so dang tre hien tai
@@ -176,7 +267,9 @@ async function buildDeptHistory() {
   );
   const currents = await query(
     `SELECT mnt_dept_no AS dept, COUNT(*) AS cnt
-     FROM eqm_mnt_delay WHERE resolved_at IS NULL GROUP BY mnt_dept_no`,
+     FROM eqm_mnt_delay d
+     WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
+     GROUP BY mnt_dept_no`,
   );
   const deptCodes = totals.map((t) => t.dept).filter(Boolean);
   const nameMap = new Map();
@@ -206,7 +299,8 @@ async function buildDeptHistory() {
 // Xu huong 30 ngay: moi ngay = so episode van con tre tai ngay do (open tai cuoi ngay)
 async function buildDeptTrend(days = 30) {
   const rows = await query(
-    'SELECT occurred_at, resolved_at, mnt_dept_no FROM eqm_mnt_delay',
+    `SELECT occurred_at, resolved_at, mnt_dept_no FROM eqm_mnt_delay d
+     WHERE ${SUSPENDED_EPISODE_SQL}`,
   );
   const today = businessToday();
   const todayMs = Date.parse(`${today}T00:00:00Z`);
@@ -285,7 +379,8 @@ async function fetchDeptNameMap(deptNos) {
 
 async function queryList(reason, page, pageSize) {
   await holidayService.ensureHolidaysLoaded();
-  const where = ['resolved_at IS NULL'];
+  // Cho duyet: episode vang chi sau an han; episode do cua thiet bi pending = treo (an)
+  const where = ['d.resolved_at IS NULL', SUSPENDED_EPISODE_SQL];
   const params = { page, pageSize };
   if (reason) {
     where.push('reason = @reason');
@@ -294,7 +389,7 @@ async function queryList(reason, page, pageSize) {
   const whereSql = where.join(' AND ');
 
   const totalRow = await query(
-    `SELECT COUNT(*) AS cnt FROM eqm_mnt_delay WHERE ${whereSql}`,
+    `SELECT COUNT(*) AS cnt FROM eqm_mnt_delay d WHERE ${whereSql}`,
     params,
   );
   const total = totalRow.length > 0 ? Number(totalRow[0].cnt) : 0;
@@ -308,8 +403,9 @@ async function queryList(reason, page, pageSize) {
   const reasonCounts = REASONS.map((r) => ({ reason: r, count: 0 }));
   if (total > 0) {
     const rcRows = await query(
-      `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay
-       WHERE resolved_at IS NULL GROUP BY reason`,
+      `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay d
+     WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
+     GROUP BY reason`,
     );
     for (const rc of rcRows) {
       const item = reasonCounts.find((x) => x.reason === rc.reason);
@@ -429,7 +525,7 @@ async function adminSync(userId) {
 // days_overdue & ten thiet bi tinh/lay tu eqm_mnt luc doc, ko can sync
 async function getDelayHistory(dept, page, pageSize) {
   await holidayService.ensureHolidaysLoaded();
-  const where = [];
+  const where = [SUSPENDED_EPISODE_SQL];
   const params = { offset: (page - 1) * pageSize, pageSize };
   if (dept) {
     where.push('d.mnt_dept_no = @dept');
@@ -511,4 +607,5 @@ module.exports = {
   buildDeptTrend,
   getDelayHistory,
   REASONS,
+  SUSPENDED_EPISODE_SQL,
 };

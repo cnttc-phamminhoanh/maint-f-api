@@ -5,7 +5,13 @@ const {
   addDays,
   effectiveStatus,
 } = require('../utils/dates');
-const { queryList, buildDeptHistory, buildDeptTrend, getDelayHistory } = require('./delayed.service');
+const {
+  queryList,
+  buildDeptHistory,
+  buildDeptTrend,
+  getDelayHistory,
+  SUSPENDED_EPISODE_SQL,
+} = require('./delayed.service');
 const holidayService = require('./holiday.service');
 
 const ALL_STATUSES = [
@@ -74,8 +80,11 @@ async function getOverview() {
   const statusCounts = ALL_STATUSES.map((status) => ({ status, count: statusMap.get(status) || 0 }));
   const cycleCounts = ALL_CYCLES.map((cycle) => ({ cycle, count: cycleMap.get(cycle) || 0 }));
 
+  // Cho duyet = trach nhiem nguoi duyet: khong dem vao so "dang tre han" (2026-10-08)
   const delayedReasonRows = await query(
-    'SELECT reason, COUNT(*) AS count FROM eqm_mnt_delay WHERE resolved_at IS NULL GROUP BY reason',
+    `SELECT reason, COUNT(*) AS count FROM eqm_mnt_delay d
+     WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
+     GROUP BY reason`,
   );
   const delayedByReason = ALL_REASONS.map((reason) => ({
     reason,
@@ -84,7 +93,9 @@ async function getOverview() {
   const delayedTotal = delayedByReason.reduce((sum, r) => sum + r.count, 0);
 
   const delayedDeptRows = await query(
-    'SELECT mnt_dept_no AS dept, COUNT(*) AS count FROM eqm_mnt_delay WHERE resolved_at IS NULL GROUP BY mnt_dept_no',
+    `SELECT mnt_dept_no AS dept, COUNT(*) AS count FROM eqm_mnt_delay d
+     WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
+     GROUP BY mnt_dept_no`,
   );
   const deptDelayedMap = new Map();
   for (const r of delayedDeptRows) {
@@ -228,8 +239,8 @@ async function getEquipmentStatistics(params) {
   let noMatch = false;
   if (ALL_REASONS.includes(params.delayReason)) {
     const delayRows = await query(
-      `SELECT equ_no FROM eqm_mnt_delay
-       WHERE reason = @reason AND resolved_at IS NULL`,
+      `SELECT equ_no FROM eqm_mnt_delay d
+       WHERE reason = @reason AND resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}`,
       { reason: params.delayReason },
     );
     if (delayRows.length === 0) {
