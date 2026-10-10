@@ -334,11 +334,13 @@ async function listDevices(params) {
       ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
       ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
       ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'needs_maintenance' THEN 1 ELSE 0 END), 0) AS stNeeds,
+      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
+          AND ${nextDueSql()} <= @today THEN 1 ELSE 0 END), 0) AS stNeeds,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'in_maintenance' THEN 1 ELSE 0 END), 0) AS stInMaint,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'pending_approval' THEN 1 ELSE 0 END), 0) AS stPending,
       ISNULL(SUM(CASE WHEN d.maintenance_status = 'rejected' THEN 1 ELSE 0 END), 0) AS stRejected,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'not_due' THEN 1 ELSE 0 END), 0) AS stNotDue,
+      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
+          AND ${nextDueSql()} > @today THEN 1 ELSE 0 END), 0) AS stNotDue,
       ISNULL(SUM(CASE WHEN d.maintenance_type = '1_week' THEN 1 ELSE 0 END), 0) AS cy1w,
       ISNULL(SUM(CASE WHEN d.maintenance_type IN ('2_weeks','2_week') THEN 1 ELSE 0 END), 0) AS cy2w,
       ISNULL(SUM(CASE WHEN d.maintenance_type = '1_month' THEN 1 ELSE 0 END), 0) AS cy1m,
@@ -351,8 +353,15 @@ async function listDevices(params) {
   // them loc status / cycle / due
   const finalCond = [...cond];
   if (params.status) {
-    values.status = params.status;
-    finalCond.push('d.maintenance_status = @status');
+    // 2026-10-10: status filter phai dung chuan effectiveStatus giong card hien thi
+    if (params.status === 'needs_maintenance') {
+      finalCond.push(`d.maintenance_status IN ('needs_maintenance','not_due') AND ${nextDueSql()} <= @today`);
+    } else if (params.status === 'not_due') {
+      finalCond.push(`d.maintenance_status IN ('needs_maintenance','not_due') AND ${nextDueSql()} > @today`);
+    } else {
+      values.status = params.status;
+      finalCond.push('d.maintenance_status = @status');
+    }
   }
   if (params.cycle) {
     values.cycle = params.cycle;
