@@ -41,7 +41,14 @@ function nextDueSql() {
 const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
   d.maintenance_type, d.maintenance_status, d.completion_requested_at, d.rejection_reason,
   d.maintainer_emp_no, d.approver_emp_no, d.temp_maintainer_emp_no, d.temp_maintainer_date,
-  d.equ_addr, d.equ_type, d.equ_type_desc, d.mnt_dept_no, d.pending_maintenance_items`;
+  d.equ_addr, d.equ_dept_no, d.equ_type, d.equ_type_desc, d.mnt_dept_no, d.pending_maintenance_items,
+  COALESCE(b1.dept_name, b2.dept_name) AS equ_addr_name`;
+
+// 2026-10-10: vi tri thiet bi = ten phong ban trong bas_dept;
+// uu tien equ_addr, khong khop thi fallback equ_dept_no (user da check SELECT nay)
+const DEVICE_FROM = `FROM eqm_mnt d
+  LEFT JOIN dbo.bas_dept b1 ON b1.dept_no = d.equ_addr
+  LEFT JOIN dbo.bas_dept b2 ON b2.dept_no = d.equ_dept_no`;
 
 const EMPTY_COUNTS = {
   dueCounts: { all: 0, overdue: 0, today: 0, tomorrow: 0, later: 0 },
@@ -149,6 +156,7 @@ function toDeviceRecord(row, empNameMap, today, xuongMap) {
     isTemporaryHandover: isTempActive(row, today),
     rejectionReason: row.rejection_reason || '',
     factory: row.equ_addr || '',
+    factoryName: row.equ_addr_name || '',
     equType: row.equ_type || '',
     equTypeDesc: row.equ_type_desc || '',
   };
@@ -184,7 +192,7 @@ function assertCanMaintain(caller, row, today) {
 
 async function getDeviceRow(id) {
   if (!/^\d+$/.test(String(id))) return null;
-  return queryOne(`SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.id = @id`, { id });
+  return queryOne(`SELECT ${DEVICE_SELECT} ${DEVICE_FROM} WHERE d.id = @id`, { id });
 }
 
 async function getDeviceById(id) {
@@ -374,7 +382,7 @@ async function listDevices(params) {
   values.pageSize = params.pageSize;
   const rows = await query(
     `SELECT ${DEVICE_SELECT}
-     FROM eqm_mnt d ${joinSql} ${finalWhere}
+     ${DEVICE_FROM} ${joinSql} ${finalWhere}
      ORDER BY ${orderByDeviceList(today)}
      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     values,
@@ -405,7 +413,7 @@ async function listDevices(params) {
 
 async function lookupDeviceByQr(qr, userId) {
   // chi khop chinh xac ma thiet bi - khong co bat ky su sua loi nao
-  const row = await queryOne(`SELECT ${DEVICE_SELECT} FROM eqm_mnt d WHERE d.equ_no = @qr`, { qr });
+  const row = await queryOne(`SELECT ${DEVICE_SELECT} ${DEVICE_FROM} WHERE d.equ_no = @qr`, { qr });
   if (!row) throw new ApiError(404, 'DEVICE_NOT_FOUND');
   if (userId) {
     const caller = await getCaller(userId);
@@ -438,7 +446,7 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
   values.pageSize = pageSize;
   values.today = today;
   const rows = await query(
-    `SELECT ${DEVICE_SELECT} FROM eqm_mnt d ${where}
+    `SELECT ${DEVICE_SELECT} ${DEVICE_FROM} ${where}
      ORDER BY ${orderSql}
      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     values,
@@ -460,6 +468,8 @@ async function listFactories(userId) {
     const head = row.chu_quan_emp_no || '';
     return {
       factory: row.xuong_no,
+      // 2026-10-10: dropdown hien ten phong ban (bas_dept.dept_name) thay ma xuong
+      factoryName: row.xuong_dept_name || row.xuong_name || row.xuong_no,
       approver: {
         userId: head,
         empNo: head,
@@ -574,11 +584,14 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
     `INSERT INTO eqm_mt1 (sheet_no, sheet_type, sheet_date, dept_no, emp_no, mt_flag,
       equ_no, rem, create_date, check_date, create_user, check_user, sheet_sta, check_sta,
       user_list, cur_check_user)
-    VALUES (@sheetNo, 'EMGIA', @sheetDate, @deptNo, @empNo, @mtFlag, @equNo, NULL,
-      GETDATE(), GETDATE(), @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
+     VALUES (@sheetNo, 'EMGIA', @sheetDate, @deptNo, @empNo, @mtFlag, @equNo, NULL,
+       @createDate, GETDATE(), @empNo, @checkEmpNo, '1', '1', NULL, NULL)`,
     {
       sheetNo,
       sheetDate,
+      // 2026-10-10 user chot: create_date = gio nhan vien gui xet duyet
+      // (completion_requested_at, cung gia tri sheet_date), check_date = luc duyet
+      createDate: sheetDate,
       deptNo: row.mnt_dept_no || null,
       empNo: maintainerEmpNo,
       mtFlag: cycleToMtFlag(row.maintenance_type),
@@ -769,7 +782,7 @@ async function bulkApproveCompletion(ids, userId) {
     Object.assign(scopeParams, xParams);
   }
   const rows = await query(
-    `SELECT ${DEVICE_SELECT} FROM eqm_mnt d
+    `SELECT ${DEVICE_SELECT} ${DEVICE_FROM}
      WHERE d.id IN (${inSql}) AND d.maintenance_status = 'pending_approval'
        AND (${scopeParts.join(' OR ')})`,
     { ...params, ...scopeParams },
