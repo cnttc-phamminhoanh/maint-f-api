@@ -60,10 +60,13 @@ async function getXuongHeadMap(codes) {
 }
 
 async function listAllXuong() {
+  // 2026-10-10: ten phan xuong lay tu bas_dept.dept_name (xuong_no = dept_no)
   return query(
-    `SELECT x.xuong_no, x.xuong_name, x.chu_quan_emp_no, e.emp_name
+    `SELECT x.xuong_no, x.xuong_name, x.chu_quan_emp_no, e.emp_name,
+            bd.dept_name AS xuong_dept_name
       FROM xuong_mnt x
       LEFT JOIN emp_mnt e ON e.emp_no = x.chu_quan_emp_no
+      LEFT JOIN dbo.bas_dept bd ON bd.dept_no = x.xuong_no
       ORDER BY x.xuong_no ASC`,
   );
 }
