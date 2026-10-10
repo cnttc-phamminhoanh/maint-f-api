@@ -1,5 +1,6 @@
-const { query, withTransaction, txQuery, inClause } = require('../db');
+const { query, withTransaction, txQuery, inClause, inClauseSafe } = require('../db');
 const holidayService = require('./holiday.service');
+const workshopService = require('./workshop.service');
 const { assertAdmin, getCaller } = require('../utils/auth');
 const {
   businessToday,
@@ -59,6 +60,10 @@ async function computeCurrentDelayed() {
             completion_requested_at
      FROM eqm_mnt`,
   );
+  // 2026-10-09: approver_emp_no = ma phan xuong; chiu trach nhiem cho duyet =
+  // chu quan xuong. Chua co du lieu xuong_mnt thi fallback ve ma cu (MNV)
+  const xuongCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
+  const xuongMap = await workshopService.getXuongHeadMap(xuongCodes);
   const today = businessToday();
   const current = new Map();
   for (const row of rows) {
@@ -94,7 +99,10 @@ async function computeCurrentDelayed() {
       employeeResponsible: employeeReason
         ? responsibleForReason(employeeReason, row)
         : null,
-      approverResponsible: row.approver_emp_no || null,
+      approverResponsible:
+        row.approver_emp_no && xuongMap.get(row.approver_emp_no)
+          ? xuongMap.get(row.approver_emp_no).headEmpNo || null
+          : row.approver_emp_no || null,
       awaitingStart,
       employeeOccurredAt: addDays(due, 1),
     });
@@ -277,7 +285,7 @@ async function buildDeptHistory() {
   const deptCodes = totals.map((t) => t.dept).filter(Boolean);
   const nameMap = new Map();
   if (deptCodes.length > 0) {
-    const { sql: inSql, params } = inClause(deptCodes, 'd');
+    const { sql: inSql, params } = inClauseSafe(deptCodes, 'd');
     const deptNames = await query(
       `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${inSql})`,
       params,
@@ -358,7 +366,7 @@ async function fetchEmpNameMap(empNos) {
   const map = new Map();
   const uniq = Array.from(new Set(empNos)).filter(Boolean);
   if (uniq.length === 0) return map;
-  const { sql: inSql, params } = inClause(uniq, 'e');
+  const { sql: inSql, params } = inClauseSafe(uniq, 'e');
   const rows = await query(
     `SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${inSql})`,
     params,
@@ -371,7 +379,7 @@ async function fetchDeptNameMap(deptNos) {
   const map = new Map();
   const uniq = Array.from(new Set(deptNos)).filter(Boolean);
   if (uniq.length === 0) return map;
-  const { sql: inSql, params } = inClause(uniq, 'd');
+  const { sql: inSql, params } = inClauseSafe(uniq, 'd');
   const rows = await query(
     `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${inSql})`,
     params,
@@ -454,7 +462,7 @@ async function queryList(reason, page, pageSize) {
   // So lan tre han lich su cua tung thiet bi trong trang hien tai
   const episodeMap = new Map();
   if (equNos.size > 0) {
-    const { sql: inSql, params: eqParams } = inClause(Array.from(equNos), 'q');
+    const { sql: inSql, params: eqParams } = inClauseSafe(Array.from(equNos), 'q');
     const epRows = await query(
       `SELECT equ_no, COUNT(*) AS cnt FROM eqm_mnt_delay
        WHERE equ_no IN (${inSql}) GROUP BY equ_no`,

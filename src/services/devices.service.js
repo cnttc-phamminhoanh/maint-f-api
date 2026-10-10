@@ -1,4 +1,4 @@
-const { query, queryOne, withTransaction, txQuery, inClause } = require('../db');
+const { query, queryOne, withTransaction, txQuery, inClause, inClauseSafe } = require('../db');
 const { ApiError } = require('../errors');
 const workshopService = require('./workshop.service');
 const config = require('../config');
@@ -97,7 +97,7 @@ async function getEmpNameMap(empNos) {
   const unique = [...new Set(empNos.filter(Boolean))];
   const map = new Map();
   if (unique.length === 0) return map;
-  const { sql: inSql, params } = inClause(unique, 'e');
+  const { sql: inSql, params } = inClauseSafe(unique, 'e');
   const rows = await query(
     `SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${inSql})`,
     params,

@@ -1,10 +1,4 @@
-const { query, inClause } = require('../db');
-const {
-  businessToday,
-  daysBetween,
-  addDays,
-  effectiveStatus,
-} = require('../utils/dates');
+const { query, inClauseSafe } = require('../db');
 const {
   queryList,
   buildDeptHistory,
@@ -12,6 +6,14 @@ const {
   getDelayHistory,
   SUSPENDED_EPISODE_SQL,
 } = require('./delayed.service');
+const {
+  businessToday,
+  daysBetween,
+  addDays,
+  effectiveStatus,
+  addMonthsClamped,
+  CYCLE_MONTHS,
+} = require('../utils/dates');
 const holidayService = require('./holiday.service');
 
 const ALL_STATUSES = [
@@ -105,7 +107,7 @@ async function getOverview() {
   const deptCodes = [...new Set([...deptDeviceMap.keys(), ...deptDelayedMap.keys()])];
   const deptNameMap = new Map();
   if (deptCodes.length > 0) {
-    const { sql: inSql, params } = inClause(deptCodes, 'd');
+    const { sql: inSql, params } = inClauseSafe(deptCodes, 'd');
     const deptRows = await query(
       `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${inSql})`,
       params,
@@ -247,7 +249,7 @@ async function getEquipmentStatistics(params) {
       noMatch = true;
     } else {
       const delayNos = delayRows.map((r) => r.equ_no);
-      const { sql: inSql, params: inParams } = inClause(delayNos, 'd');
+      const { sql: inSql, params: inParams } = inClauseSafe(delayNos, 'd');
       conditions.push(`equ_no IN (${inSql})`);
       Object.assign(values, inParams);
     }
@@ -289,7 +291,7 @@ async function getEquipmentStatistics(params) {
   const finalNoMatch = noMatch || dueNoMatch;
   const finalConditions = [...conditions];
   if (dueFilteredIds) {
-    const { sql: inSql, params: inParams } = inClause(dueFilteredIds, 'f');
+    const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
     finalConditions.push(`id IN (${inSql})`);
     Object.assign(values, inParams);
   }
@@ -323,7 +325,7 @@ async function getEquipmentStatistics(params) {
   ];
   const empNameMap = new Map();
   if (empNos.length > 0) {
-    const { sql: inSql, params } = inClause(empNos, 'e');
+    const { sql: inSql, params } = inClauseSafe(empNos, 'e');
     const empRows = await query(`SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${inSql})`, params);
     for (const r of empRows) empNameMap.set(r.emp_no, r.emp_name || '');
   }
@@ -385,4 +387,93 @@ async function getEquipmentStatistics(params) {
   return { items, total, page: params.page, pageSize: params.pageSize, factories, maintTypes, empOptions, respOptions };
 }
 
-module.exports = { getOverview, getDelayedStatistics, getEquipmentStatistics, getDelayHistory };
+async function listCompletedToday(factory, page, pageSize) {
+  const today = businessToday();
+  const dayStart = new Date(`${today}T00:00:00+07:00`);
+  const dayEnd = new Date(`${addDays(today, 1)}T00:00:00+07:00`);
+  const where = ['m.sheet_date >= @s AND m.sheet_date < @e'];
+  const values = { s: dayStart, e: dayEnd };
+  if (factory) {
+    where.push('d.equ_addr = @factory');
+    values.factory = factory;
+  }
+  const whereSql = `WHERE ${where.join(' AND ')}`;
+  const totalRows = await query(
+    `SELECT COUNT(*) AS total FROM eqm_mt1 m
+      LEFT JOIN eqm_mnt d ON d.equ_no = m.equ_no
+      ${whereSql}`,
+    values,
+  );
+  const total = totalRows[0] ? totalRows[0].total : 0;
+  const offset = (page - 1) * pageSize;
+  const rows = await query(
+    `SELECT m.sheet_no, m.sheet_date, m.equ_no, m.emp_no, m.mt_flag,
+            d.equ_name, d.equ_addr, d.equ_type, d.equ_type_desc,
+            d.maintainer_emp_no, d.approver_emp_no, d.temp_maintainer_emp_no,
+            d.maintenance_type, d.max_mt_date, d.use_date
+      FROM eqm_mt1 m
+      LEFT JOIN eqm_mnt d ON d.equ_no = m.equ_no
+      ${whereSql}
+      ORDER BY m.sheet_date DESC, m.sheet_no DESC
+      OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`,
+    values,
+  );
+  const empNos = new Set();
+  const deptNos = new Set();
+  for (const r of rows) {
+    if (r.maintainer_emp_no) empNos.add(r.maintainer_emp_no);
+    if (r.approver_emp_no) empNos.add(r.approver_emp_no);
+    if (r.temp_maintainer_emp_no) empNos.add(r.temp_maintainer_emp_no);
+    if (r.emp_no) empNos.add(r.emp_no);
+    if (r.equ_addr) deptNos.add(r.equ_addr);
+  }
+  const empMap = new Map();
+  if (empNos.size > 0) {
+    const empRows = await query(
+      `SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${[...empNos].map((_, i) => `@e${i}`).join(',')})`,
+      Object.fromEntries([...empNos].map((e, i) => [`e${i}`, e])),
+    );
+    for (const r of empRows) empMap.set(r.emp_no, r.emp_name || '');
+  }
+  const deptMap = new Map();
+  if (deptNos.size > 0) {
+    const deptRows = await query(
+      `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${[...deptNos].map((_, i) => `@d${i}`).join(',')})`,
+      Object.fromEntries([...deptNos].map((e, i) => [`d${i}`, e])),
+    );
+    for (const r of deptRows) deptMap.set(r.mnt_dept_no, r.mnt_dept_name || '');
+  }
+  const items = rows.map((r) => {
+    const maintainer = r.maintainer_emp_no || '';
+    const active = r.temp_maintainer_emp_no || maintainer;
+    const nextDue = r.max_mt_date
+      ? addMonthsClamped(new Date(r.max_mt_date), CYCLE_MONTHS[r.maintenance_type] || 1)
+      : null;
+    const todayD = new Date(`${today}T00:00:00+07:00`);
+    const daysOverdue = nextDue ? Math.max(0, Math.floor((todayD - nextDue) / 86400000)) : 0;
+    return {
+      id: r.sheet_no || r.equ_no || '',
+      equNo: r.equ_no || '',
+      equName: r.equ_name || '',
+      equType: r.equ_type || null,
+      equTypeDesc: r.equ_type_desc || null,
+      factory: r.equ_addr || null,
+      factoryName: deptMap.get(r.equ_addr) || null,
+      maintainerEmpNo: maintainer || null,
+      maintainerName: empMap.get(maintainer) || null,
+      responsibleEmpNo: r.approver_emp_no || null,
+      responsibleName: empMap.get(r.approver_emp_no) || null,
+      activeMaintainerEmpNo: active || null,
+      activeMaintainerName: empMap.get(active) || null,
+      maintenanceCycle: r.maintenance_type || '1_month',
+      maintenanceStatus: 'not_due',
+      nextDueDate: nextDue ? nextDue.toISOString() : '',
+      daysOverdue,
+      completedAt: r.sheet_date ? new Date(r.sheet_date).toISOString() : null,
+      sheetNo: r.sheet_no || null,
+    };
+  });
+  return { items, total, page, pageSize, factories: [], maintTypes: [], empOptions: [], respOptions: [] };
+}
+
+module.exports = { getOverview, getDelayedStatistics, getEquipmentStatistics, getDelayHistory, listCompletedToday };

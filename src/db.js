@@ -67,4 +67,14 @@ function inClause(values, prefix) {
   return { sql: names.join(', '), params };
 }
 
-module.exports = { connectDb, getPool, query, queryOne, withTransaction, txQuery, inClause, sql };
+const NUMERIC_ID_RE = /^[A-Za-z0-9_-]+$/;
+
+function inClauseSafe(values, prefix) {
+  if (values.length <= 500) return inClause(values, prefix);
+  const allSafe = values.every((v) => NUMERIC_ID_RE.test(String(v)));
+  if (!allSafe) return inClause(values, prefix);
+  const literals = values.map((v) => `'${String(v).replace(/'/g, '\'\'')}'`).join(', ');
+  return { sql: literals, params: {} };
+}
+
+module.exports = { connectDb, getPool, query, queryOne, withTransaction, txQuery, inClause, inClauseSafe, sql };
