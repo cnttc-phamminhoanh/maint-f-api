@@ -20,6 +20,7 @@ const ordersRoutes = require('./routes/maintenance-orders.routes');
 const delayedRoutes = require('./routes/delayed.routes');
 const statisticsRoutes = require('./routes/statistics.routes');
 const holidayRoutes = require('./routes/holiday.routes');
+const xuongsRoutes = require('./routes/xuong.routes');
 const holidayService = require('./services/holiday.service');
 
 const app = express();
@@ -49,6 +50,7 @@ app.use('/api/devices', devicesRoutes);
 app.use('/api/maintenance-orders', ordersRoutes);
 app.use('/api/delayed-devices', delayedRoutes);
 app.use('/api/holidays', holidayRoutes);
+app.use('/api/xuongs', xuongsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
