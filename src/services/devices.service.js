@@ -20,6 +20,7 @@ const {
 } = require('../utils/dates');
 const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order.service');
 const holidayService = require('./holiday.service');
+const pushService = require('../push/push.service');
 
 // bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1).
 // 2026-10-07: boc them fn_shift_due de doi ngay han qua ngay nghi (chu nhat + hr_holiday)
@@ -700,6 +701,9 @@ async function submitApproval(id, userId, itemIds) {
     values,
   );
   if (updated.length === 0) throw new ApiError(404, 'Device not found');
+  // Bao nhom duyet (fire-and-forget, khong anh huong nghiep vu)
+  pushService.dispatchApprovalEvent('submitted', row, caller.empNo)
+    .catch((err) => console.error('[push]', err.message));
   return { success: true };
 }
 
@@ -743,6 +747,9 @@ async function approveCompletion(id, userId) {
       { equNo: row.equ_no, reqAt: row.completion_requested_at || null },
     );
   });
+  // Bao nhom duyet con lai + nguoi gui don (fire-and-forget)
+  pushService.dispatchApprovalEvent('approved', row, requester.emp_no)
+    .catch((err) => console.error('[push]', err.message));
   return { success: true };
 }
 
@@ -764,6 +771,9 @@ async function rejectCompletion(id, userId, reason) {
     { reason, id },
   );
   if (updated.length === 0) throw new ApiError(404, 'Device not found');
+  // Bao nhom duyet con lai + nguoi gui don (fire-and-forget)
+  pushService.dispatchApprovalEvent('rejected', row, requester.emp_no)
+    .catch((err) => console.error('[push]', err.message));
   return { success: true };
 }
 
@@ -822,6 +832,11 @@ async function bulkApproveCompletion(ids, userId) {
       );
     }
   });
+  // Bao theo tung thiet bi trong ket qua (fire-and-forget)
+  for (const r of rows) {
+    pushService.dispatchApprovalEvent('approved', r, requester.emp_no)
+      .catch((err) => console.error('[push]', err.message));
+  }
   return { success: true, processed: rows.length };
 }
 
@@ -855,6 +870,18 @@ async function bulkRejectCompletion(ids, userId, reason) {
        AND (${scopeParts.join(' OR ')})`,
     { ...params, ...scopeParams, reason },
   );
+  // Bulk reject chi co id trong ket qua -> doc lai row thiet bi de dispatch
+  if (updated.length > 0) {
+    const { sql: rIn, params: rParams } = inClause(updated.map((u) => u.id), 'r');
+    const rows = await query(
+      `SELECT ${DEVICE_SELECT} ${DEVICE_FROM} WHERE d.id IN (${rIn})`,
+      rParams,
+    );
+    for (const r of rows) {
+      pushService.dispatchApprovalEvent('rejected', r, requester.emp_no)
+        .catch((err) => console.error('[push]', err.message));
+    }
+  }
   return { success: true, processed: updated.length };
 }
 
