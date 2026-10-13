@@ -17,7 +17,7 @@ const DISPATCH_TITLES = {
 async function registerToken(empNo, token, deviceLabel) {
   await query(
     `MERGE emp_push_token AS t
-     USING (SELECT 1) AS s ON t.fcm_token = @token
+     USING (SELECT 1 AS x) AS s ON t.fcm_token = @token
      WHEN MATCHED THEN
        UPDATE SET emp_no = @empNo, is_active = 1,
                   last_seen_at = GETDATE(), device_label = @label
