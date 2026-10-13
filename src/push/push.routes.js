@@ -71,8 +71,8 @@ router.post(
 );
 
 // Field nguoi nhan dat ten targetEmpNo (khong duoc dat empNo):
-// requireAuth chan moi body/query co empNo khac chu phien (403 TOKEN_USER_MISMATCH),
-// admin se khong gui test cho nguoi khac duoc
+// requireAuth chan moi body/query co empNo khac chu phien (403 TOKEN_USER_MISMATCH).
+// Khong truyen targetEmpNo = gui thu toi toan bo token dang hoat dong
 router.post(
   '/test',
   requireAdmin,
@@ -80,8 +80,7 @@ router.post(
     targetEmpNo: Joi.string().max(20).optional(),
   })),
   asyncHandler(async (req, res) => {
-    const target = req.body.targetEmpNo || req.user.empNo;
-    res.json(await pushService.sendTest(target));
+    res.json(await pushService.sendTest(req.body.targetEmpNo || undefined));
   }),
 );
 

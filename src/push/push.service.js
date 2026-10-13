@@ -114,15 +114,25 @@ async function insertLogRows(entries) {
 
 // ==== Gui ====
 
+// empNo = gui thu cho 1 MNV; khong trui = gui thu toi toan bo token dang hoat dong
 async function sendTest(empNo) {
   if (!fcm.isPushEnabled()) {
     throw new ApiError(400, 'Push chưa được cấu hình (FIREBASE_SERVICE_ACCOUNT)');
   }
-  const tokenRows = await query(
-    'SELECT fcm_token FROM emp_push_token WHERE is_active = 1 AND emp_no = @empNo',
-    { empNo },
-  );
+  const tokenRows = empNo
+    ? await query(
+      'SELECT emp_no, fcm_token FROM emp_push_token WHERE is_active = 1 AND emp_no = @empNo',
+      { empNo },
+    )
+    : await query('SELECT emp_no, fcm_token FROM emp_push_token WHERE is_active = 1');
   const tokens = tokenRows.map((r) => r.fcm_token);
+  const tokenToEmp = new Map(tokenRows.map((r) => [r.fcm_token, r.emp_no]));
+  if (tokens.length === 0) {
+    const who = empNo
+      ? `cho MNV ${empNo}. Thiết bị của người này cần bật thông báo đẩy trước.`
+      : '— hiện chưa có thiết bị nào đăng ký nhận thông báo.';
+    throw new ApiError(400, `Không tìm thấy token push đang hoạt động ${who}`);
+  }
   const { results } = await fcm.sendMulticast(tokens, {
     title: 'Thông báo thử',
     body: 'Đây là thông báo thử từ hệ thống bảo dưỡng thiết bị.',
@@ -131,8 +141,8 @@ async function sendTest(empNo) {
   await insertLogRows(results.map((r) => ({
     eventType: 'test',
     equNo: null,
-    actorEmpNo: empNo,
-    recipientEmpNo: empNo,
+    actorEmpNo: empNo || null,
+    recipientEmpNo: tokenToEmp.get(r.token) || '',
     status: r.ok ? 'sent' : 'failed',
     error: r.ok ? '' : (r.errorMessage || r.errorCode || 'unknown'),
   })));
