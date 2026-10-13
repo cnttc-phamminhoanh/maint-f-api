@@ -24,6 +24,11 @@ const ALL_STATUSES = [
   'not_due',
 ];
 const ALL_CYCLES = ['1_week', '2_weeks', '1_month', '1_year'];
+function normalizeCycle(c) {
+  if (c === '2_week') return '2_weeks';
+  if (ALL_CYCLES.includes(c)) return c;
+  return '1_month';
+}
 const ALL_REASONS = ['not_started', 'in_progress', 'awaiting_approval', 'rejected'];
 const DUE_FILTERS = ['today', 'tomorrow', 'normal', 'overdue'];
 const CYCLE_LABEL_MAP = {
@@ -58,7 +63,7 @@ async function getOverview() {
     const displayStatus = effectiveStatus(device, today, nextDue);
     statusMap.set(displayStatus, (statusMap.get(displayStatus) || 0) + 1);
 
-    const cycle = ALL_CYCLES.includes(row.maintenance_type) ? row.maintenance_type : '1_month';
+    const cycle = normalizeCycle(row.maintenance_type);
     cycleMap.set(cycle, (cycleMap.get(cycle) || 0) + 1);
 
     const stat = cycleStatMap.get(cycle);
@@ -177,9 +182,8 @@ async function getOverview() {
     }
     const entry = cycleStatsMap.get(key);
     entry.total += Number(r.cnt);
-    if (Object.prototype.hasOwnProperty.call(entry.cycleCounts, r.mtype)) {
-      entry.cycleCounts[r.mtype] += Number(r.cnt);
-    }
+    const cycleKey = normalizeCycle(r.mtype);
+    entry.cycleCounts[cycleKey] += Number(r.cnt);
   }
   for (const entry of cycleStatsMap.values()) {
     entry.departmentName = deptNameMap.get(entry.departmentCode) || entry.departmentCode;

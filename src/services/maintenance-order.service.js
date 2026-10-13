@@ -2,7 +2,13 @@ const { query, queryOne, inClause } = require('../db');
 const { toIso } = require('../utils/dates');
 
 const FLAG_TO_SW = { 1: 'wk1_sw', 2: 'wk2_sw', 3: 'mon_sw', 4: 'year_sw' };
-const CYCLE_TO_FLAG = { '1_week': '1', '2_weeks': '2', '1_month': '3', '1_year': '4' };
+const CYCLE_TO_FLAG = {
+  '1_week': '1',
+  '2_week': '2',
+  '2_weeks': '2',
+  '1_month': '3',
+  '1_year': '4',
+};
 
 function cycleToMtFlag(cycle) {
   return CYCLE_TO_FLAG[cycle] || '3';
@@ -63,11 +69,53 @@ async function listTemplates(equType, mtFlag) {
 // Tra ve snapshot cac hang muc duoc chon (fitNo/fitName/mtDesc) de luu vao pending
 async function resolveSelectedTemplates(equType, mtFlag, itemIds) {
   if (!itemIds || itemIds.length === 0) return [];
-  const { items } = await listTemplates(equType, mtFlag);
   const selected = new Set(itemIds.map(String));
-  return items
-    .filter((item) => selected.has(item.id))
-    .map((item) => ({ fitNo: item.fitNo, fitName: item.fitName, mtDesc: item.mtDesc }));
+
+  function pick(list) {
+    return list
+      .filter((item) => selected.has(item.id))
+      .map((item) => ({ fitNo: item.fitNo, fitName: item.fitName, mtDesc: item.mtDesc }));
+  }
+
+  const { items } = await listTemplates(equType, mtFlag);
+  const matched = pick(items);
+  if (matched.length > 0) return matched;
+
+  // Fallback: neu cycle flag mapping bi loi (vi du 2_week vs 2_weeks)
+  // thi tim trong TAT CA hang muc cua loai nay (ko filter switch) de khong block nguoi dung.
+  // Giu nguyen listTemplates logic (min id / group by fit_no) cho id giong nhau giua 2 lan goi.
+  const rows = await query(
+    `SELECT id, equ_type, fit_no, fit_name, mt_desc, wk1_sw, wk2_sw, mon_sw, year_sw
+     FROM eqm_bas_mt
+     WHERE equ_type = @t
+     ORDER BY fit_no ASC, mt_desc ASC`,
+    { t: equType },
+  );
+  const byFitNo = new Map();
+  for (const row of rows) {
+    let group = byFitNo.get(row.fit_no);
+    if (!group) {
+      group = {
+        id: row.id,
+        fitName: row.fit_name,
+        descs: [],
+      };
+      byFitNo.set(row.fit_no, group);
+    }
+    if (Number(row.id) < Number(group.id)) group.id = row.id;
+    if (group.fitName === null && row.fit_name) group.fitName = row.fit_name;
+    if (row.mt_desc) group.descs.push(row.mt_desc);
+  }
+  const allItems = [];
+  for (const [fitNo, group] of byFitNo) {
+    allItems.push({
+      id: String(group.id),
+      fitNo,
+      fitName: group.fitName,
+      mtDesc: group.descs.join(' - '),
+    });
+  }
+  return pick(allItems);
 }
 
 // Danh sach don bao duong cua thiet bi (theo equ_no).

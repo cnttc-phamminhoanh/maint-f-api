@@ -14,6 +14,12 @@ const {
 
 const REASONS = ['not_started', 'in_progress', 'awaiting_approval', 'rejected'];
 
+function normalizeMaintenanceType(t) {
+  if (t === '2_week') return '2_weeks';
+  if (['1_week', '2_weeks', '1_month', '1_year'].includes(t)) return t;
+  return '1_month';
+}
+
 function reasonForStatus(status) {
   switch (status) {
   case 'not_due':
@@ -91,7 +97,7 @@ async function computeCurrentDelayed() {
       nextDueDate: due,
       daysOverdue: daysBetween(due, today),
       maxMtDate: row.max_mt_date ? fmtDate(row.max_mt_date) : null,
-      maintenanceType: row.maintenance_type || '1_month',
+      maintenanceType: normalizeMaintenanceType(row.maintenance_type),
       maintainerEmpNo: row.maintainer_emp_no || null,
       mntDeptNo: row.mnt_dept_no || null,
       pending,
