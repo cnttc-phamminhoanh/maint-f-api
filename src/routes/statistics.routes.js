@@ -70,4 +70,21 @@ router.get(
   }),
 );
 
+// 2026-10-10: danh sach don bao duong hoan thanh hom nay (cho BI KPI Hoan thanh hom nay)
+router.get(
+  '/completed-today',
+  validate(
+    Joi.object({
+      factory: Joi.string().allow('').default(''),
+      page: Joi.number().integer().min(1).default(1),
+      pageSize: Joi.number().integer().min(1).max(100).default(20),
+    }),
+    'query',
+  ),
+  asyncHandler(async (req, res) => {
+    const q = getQuery(req);
+    res.json(await statsService.listCompletedToday(q.factory || '', q.page, q.pageSize));
+  }),
+);
+
 module.exports = router;
