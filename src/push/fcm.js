@@ -61,10 +61,19 @@ async function sendMulticast(tokens, { title, body, data }) {
     // FCM data chi nhan gia tri chuoi
     const safeData = {};
     for (const [k, v] of Object.entries(data || {})) safeData[k] = String(v);
+    // 2026-10-14 ROOT CAUSE thông báo TRÙNG：payload có trường `notification`
+    // thì FCM Web SDK TỰ hiện 1 thông báo（bấm vào mở gốc domain → nhảy
+    // accounts.feishu.cn vì app chạy trong container Feishu chưa đăng nhập），
+    // đồng thời onBackgroundMessage trong firebase-messaging-sw.js lại
+    // showNotification thêm 1 cái = 2 thông báo từ 1 token 1 lần gửi。
+    // Sửa：gửi DATA-ONLY（không trường notification），title/body vào data，
+    // SW hiện đúng 1 cái kèm data.url。SW đọc notification.title || data.title
+    // nên không cần đổi firebase-messaging-sw.js
+    safeData.title = String(title);
+    safeData.body = String(body);
     const response = await msg.sendEachForMulticast({
       tokens: safeTokens,
-      notification: { title, body },
-      data: Object.keys(safeData).length > 0 ? safeData : undefined,
+      data: safeData,
     });
     const results = [];
     const deadTokens = [];
