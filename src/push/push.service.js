@@ -15,6 +15,19 @@ const DISPATCH_TITLES = {
 
 // MERGE khong sinh recordset -> dung query() thuong, khong duoc dung queryOne
 async function registerToken(empNo, token, deviceLabel) {
+  // 2026-10-14: user nhan 2 thong bao trung tren cung 1 dien thoai -> cung 1
+  // thiet bi co nhieu token active (cai lai app / xoa du lieu trang tao token
+  // moi, token cu khong duoc tat). Mot nguoi dung nhieu thiet bi (android,
+  // iphone, may tinh) la hop le -> chi tat token trung CUA CUNG THIET BI:
+  // cung emp_no + cung device_label (userAgent: iOS PWA va iOS Safari trung
+  // UA, android khac iphone khac may tinh thi khac UA). Token chết/khác
+  // thiết bị vẫn giữ nguyên
+  await query(
+    `UPDATE emp_push_token SET is_active = 0
+     WHERE emp_no = @empNo AND fcm_token <> @token AND is_active = 1
+       AND ISNULL(device_label, '') = @label`,
+    { empNo, token, label: deviceLabel || '' },
+  );
   await query(
     `MERGE emp_push_token AS t
      USING (SELECT 1 AS x) AS s ON t.fcm_token = @token
