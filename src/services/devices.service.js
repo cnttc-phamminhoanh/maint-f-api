@@ -291,23 +291,12 @@ async function buildScopeCondition(params, caller, values, _today) {
   }
 }
 
-async function listDevices(params) {
-  const caller = await getCaller(params.userId);
+// Dieu kien loc dung chung cho listDevices va listDeviceIds
+// (search / status / cycle / due, tra ve null = tam nhin rong)
+async function buildFilterConditions(params, caller, values) {
   const today = businessToday();
-  const values = { today, tomorrow: addDays(today, 1) };
-
   const scopeCond = await buildScopeCondition(params, caller, values, today);
-  if (scopeCond === null) {
-    return {
-      items: [],
-      position: caller.position,
-      showMaintainer: SHOW_MAINTAINER_POSITIONS.includes(caller.position),
-      total: 0,
-      page: params.page,
-      pageSize: params.pageSize,
-      ...EMPTY_COUNTS,
-    };
-  }
+  if (scopeCond === null) return null;
   const cond = [...scopeCond];
   let needJoin = false;
 
@@ -326,30 +315,6 @@ async function listDevices(params) {
   }
 
   const joinSql = needJoin ? 'LEFT JOIN emp_mnt m2 ON m2.emp_no = d.maintainer_emp_no' : '';
-  const baseWhere = cond.length > 0 ? `WHERE ${cond.join(' AND ')}` : '';
-
-  // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
-  const countRows = await query(
-    `SELECT COUNT(*) AS total,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval' THEN 1 ELSE 0 END), 0) AS overdue,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
-      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
-          AND ${nextDueSql()} <= @today THEN 1 ELSE 0 END), 0) AS stNeeds,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'in_maintenance' THEN 1 ELSE 0 END), 0) AS stInMaint,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'pending_approval' THEN 1 ELSE 0 END), 0) AS stPending,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'rejected' THEN 1 ELSE 0 END), 0) AS stRejected,
-      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
-          AND ${nextDueSql()} > @today THEN 1 ELSE 0 END), 0) AS stNotDue,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_week' THEN 1 ELSE 0 END), 0) AS cy1w,
-      ISNULL(SUM(CASE WHEN d.maintenance_type IN ('2_weeks','2_week') THEN 1 ELSE 0 END), 0) AS cy2w,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_month' THEN 1 ELSE 0 END), 0) AS cy1m,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_year' THEN 1 ELSE 0 END), 0) AS cy1y
-    FROM eqm_mnt d ${joinSql} ${baseWhere}`,
-    values,
-  );
-  const c = countRows[0];
 
   // them loc status / cycle / due
   const finalCond = [...cond];
@@ -379,6 +344,53 @@ async function listDevices(params) {
     else if (params.due === 'tomorrow') finalCond.push(`${nextDueSql()} = @tomorrow`);
     else if (params.due === 'later') finalCond.push(`${nextDueSql()} > @tomorrow`);
   }
+
+  return { cond, finalCond, joinSql };
+}
+
+async function listDevices(params) {
+  const caller = await getCaller(params.userId);
+  const today = businessToday();
+  const values = { today, tomorrow: addDays(today, 1) };
+
+  const built = await buildFilterConditions(params, caller, values);
+  if (built === null) {
+    return {
+      items: [],
+      position: caller.position,
+      showMaintainer: SHOW_MAINTAINER_POSITIONS.includes(caller.position),
+      total: 0,
+      page: params.page,
+      pageSize: params.pageSize,
+      ...EMPTY_COUNTS,
+    };
+  }
+  const { cond, finalCond, joinSql } = built;
+  const baseWhere = cond.length > 0 ? `WHERE ${cond.join(' AND ')}` : '';
+
+  // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
+  const countRows = await query(
+    `SELECT COUNT(*) AS total,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval' THEN 1 ELSE 0 END), 0) AS overdue,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
+      ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
+      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
+          AND ${nextDueSql()} <= @today THEN 1 ELSE 0 END), 0) AS stNeeds,
+      ISNULL(SUM(CASE WHEN d.maintenance_status = 'in_maintenance' THEN 1 ELSE 0 END), 0) AS stInMaint,
+      ISNULL(SUM(CASE WHEN d.maintenance_status = 'pending_approval' THEN 1 ELSE 0 END), 0) AS stPending,
+      ISNULL(SUM(CASE WHEN d.maintenance_status = 'rejected' THEN 1 ELSE 0 END), 0) AS stRejected,
+      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
+          AND ${nextDueSql()} > @today THEN 1 ELSE 0 END), 0) AS stNotDue,
+      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_week' THEN 1 ELSE 0 END), 0) AS cy1w,
+      ISNULL(SUM(CASE WHEN d.maintenance_type IN ('2_weeks','2_week') THEN 1 ELSE 0 END), 0) AS cy2w,
+      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_month' THEN 1 ELSE 0 END), 0) AS cy1m,
+      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_year' THEN 1 ELSE 0 END), 0) AS cy1y
+    FROM eqm_mnt d ${joinSql} ${baseWhere}`,
+    values,
+  );
+  const c = countRows[0];
+
   const finalWhere = finalCond.length > 0 ? `WHERE ${finalCond.join(' AND ')}` : '';
 
   const totalRows = await query(
@@ -417,6 +429,23 @@ async function listDevices(params) {
     },
     cycleCounts: { all: c.total, '1_week': c.cy1w, '2_weeks': c.cy2w, '1_month': c.cy1m, '1_year': c.cy1y },
   };
+}
+
+// 2026-10-14: endpoint nhe cho «Chon tat ca» cua FE — chi tra id theo dung
+// filter hien tai, khong dem so lieu, khong join ten, khong enrich tung dong
+async function listDeviceIds(params) {
+  const caller = await getCaller(params.userId);
+  const today = businessToday();
+  const values = { today, tomorrow: addDays(today, 1) };
+
+  const built = await buildFilterConditions(params, caller, values);
+  if (built === null) return { ids: [], total: 0 };
+  const finalWhere = built.finalCond.length > 0 ? `WHERE ${built.finalCond.join(' AND ')}` : '';
+  const rows = await query(
+    `SELECT d.id FROM eqm_mnt d ${built.joinSql} ${finalWhere} ORDER BY d.id`,
+    values,
+  );
+  return { ids: rows.map((r) => String(r.id)), total: rows.length };
 }
 
 // ==== Tim kiem ====
@@ -975,6 +1004,7 @@ async function undoMaintenance(id, userId) {
 
 module.exports = {
   listDevices,
+  listDeviceIds,
   lookupDeviceByQr,
   listManagedDevices,
   listFactories,

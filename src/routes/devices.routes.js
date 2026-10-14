@@ -41,6 +41,27 @@ router.get(
   }),
 );
 
+// 2026-10-14: chi tra ve danh sach id theo filter — dung cho «Chon tat ca»
+router.get(
+  '/ids',
+  validate(
+    Joi.object({
+      userId: Joi.string().allow('').default(''),
+      search: Joi.string().allow('').default(''),
+      status: Joi.string().valid(...STATUSES).optional(),
+      due: Joi.string().valid(...DUE_VALUES).optional(),
+      cycle: Joi.string().valid(...CYCLES).optional(),
+      scope: Joi.string().valid('mine', 'department').optional(),
+      approvalOnly: Joi.string().valid('1').optional(),
+    }),
+    'query',
+  ),
+  asyncHandler(async (req, res) => {
+    const q = getQuery(req);
+    res.json(await devicesService.listDeviceIds(q));
+  }),
+);
+
 router.get(
   '/by-qr',
   validate(
