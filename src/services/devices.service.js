@@ -752,13 +752,18 @@ async function approveCompletion(id, userId) {
   const row = await getDeviceRow(id);
   if (!row) throw new ApiError(404, 'Device not found');
   const today = businessToday();
-  // 2026-10-09: thanh vien phan xuong (xuong_mnt) hoac chu quan / van thu
-  // cua bo phan thiet bi duoc duyet; nguoi dang bao tri van duoc duyet
-  // thiet bi cua minh nhu truoc
+  // 2026-10-15 user chot: chi nhan_vien_bao_tri bi chan tu duyet don cua
+  // chinh minh; chu_quan / van_thu / thanh vien phan xuong tu quet bao tri
+  // roi gui xet duyet van duoc tu duyet don minh gui nhu binh thuong
+  if (
+    requester.position === 'nhan_vien_bao_tri' &&
+    effectiveMaintainerEmpNo(row, today) === requester.emp_no
+  ) {
+    throw new ApiError(403, 'not allowed');
+  }
   const isMember = await workshopService.isMemberOfXuong(requester.emp_no, row.approver_emp_no);
   const isDept = isDeptApprovalAllowed(requester, row);
-  const isMaintainer = effectiveMaintainerEmpNo(row, today) === requester.emp_no;
-  if (!isMember && !isDept && !isMaintainer) throw new ApiError(403, 'not allowed');
+  if (!isMember && !isDept) throw new ApiError(403, 'not allowed');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -839,10 +844,18 @@ async function bulkApproveCompletion(ids, userId) {
     scopeParts.push(`d.approver_emp_no IN (${xSql})`);
     Object.assign(scopeParams, xParams);
   }
+  // 2026-10-15 user chot: chi nhan_vien_bao_tri bi chan tu duyet don cua minh
+  let selfGuardSql = '';
+  if (requester.position === 'nhan_vien_bao_tri') {
+    scopeParams.reqEmp = requester.emp_no;
+    selfGuardSql = `
+       AND (ISNULL(d.temp_maintainer_emp_no, d.maintainer_emp_no) IS NULL
+         OR ISNULL(d.temp_maintainer_emp_no, d.maintainer_emp_no) <> @reqEmp)`;
+  }
   const rows = await query(
     `SELECT ${DEVICE_SELECT} ${DEVICE_FROM}
      WHERE d.id IN (${inSql}) AND d.maintenance_status = 'pending_approval'
-       AND (${scopeParts.join(' OR ')})`,
+       AND (${scopeParts.join(' OR ')})${selfGuardSql}`,
     { ...params, ...scopeParams },
   );
   if (rows.length === 0) return { success: true, processed: 0 };
