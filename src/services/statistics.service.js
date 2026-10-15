@@ -239,7 +239,10 @@ async function getEquipmentStatistics(params) {
     conditions.push('equ_no LIKE @equNo ESCAPE \'\\\'');
     values.equNo = `%${params.equNo.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
   }
-  if (params.maintenanceStatus) {
+  const effectiveStatuses = ['needs_maintenance', 'not_due'];
+  const rawStatuses = ['in_maintenance', 'pending_approval', 'rejected'];
+  const useEffectiveStatus = effectiveStatuses.includes(params.maintenanceStatus);
+  if (params.maintenanceStatus && rawStatuses.includes(params.maintenanceStatus)) {
     conditions.push('maintenance_status = @maintenanceStatus');
     values.maintenanceStatus = params.maintenanceStatus;
   }
@@ -263,40 +266,65 @@ async function getEquipmentStatistics(params) {
 
   let dueNoMatch = false;
   let dueFilteredIds = null;
-  if (DUE_FILTERS.includes(params.due)) {
+  let statusNoMatch = false;
+  let statusFilteredIds = null;
+  if (DUE_FILTERS.includes(params.due) || useEffectiveStatus) {
     const baseRows = await query(
-      `SELECT id, use_date, max_mt_date, maintenance_type FROM eqm_mnt ${whereSql}`,
+      `SELECT id, use_date, max_mt_date, maintenance_type, maintenance_status FROM eqm_mnt ${whereSql}`,
       values,
     );
-    const matched = [];
+    const dueMatched = [];
+    const statusMatched = [];
     for (const row of baseRows) {
       const nextDue = holidayService.getAdjustedDueDay({
         startDate: row.use_date,
         lastMaintenanceDate: row.max_mt_date,
         maintenanceCycle: row.maintenance_type,
       });
-      const diffDays = daysBetween(today, nextDue);
-      const category =
-        diffDays < 0
-          ? 'overdue'
-          : diffDays === 0
-            ? 'today'
-            : diffDays === 1
-              ? 'tomorrow'
-              : 'normal';
-      if (category === params.due) matched.push(row.id);
+      if (DUE_FILTERS.includes(params.due)) {
+        const diffDays = daysBetween(today, nextDue);
+        const category =
+          diffDays < 0
+            ? 'overdue'
+            : diffDays === 0
+              ? 'today'
+              : diffDays === 1
+                ? 'tomorrow'
+                : 'normal';
+        if (category === params.due) dueMatched.push(row.id);
+      }
+      if (useEffectiveStatus) {
+        const rawActive =
+          row.maintenance_status === 'in_maintenance' ||
+          row.maintenance_status === 'pending_approval' ||
+          row.maintenance_status === 'rejected';
+        const eff = rawActive
+          ? row.maintenance_status
+          : nextDue && nextDue <= today
+            ? 'needs_maintenance'
+            : 'not_due';
+        if (eff === params.maintenanceStatus) statusMatched.push(row.id);
+      }
     }
-    if (matched.length === 0) {
-      dueNoMatch = true;
-    } else {
-      dueFilteredIds = matched;
+    if (DUE_FILTERS.includes(params.due)) {
+      if (dueMatched.length === 0) dueNoMatch = true;
+      else dueFilteredIds = dueMatched;
+    }
+    if (useEffectiveStatus) {
+      if (statusMatched.length === 0) statusNoMatch = true;
+      else statusFilteredIds = statusMatched;
     }
   }
 
-  const finalNoMatch = noMatch || dueNoMatch;
+  const finalNoMatch = noMatch || dueNoMatch || statusNoMatch;
   const finalConditions = [...conditions];
   if (dueFilteredIds) {
     const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
+    finalConditions.push(`id IN (${inSql})`);
+    Object.assign(values, inParams);
+  }
+  if (statusFilteredIds) {
+    const { sql: inSql, params: inParams } = inClauseSafe(statusFilteredIds, 's');
     finalConditions.push(`id IN (${inSql})`);
     Object.assign(values, inParams);
   }

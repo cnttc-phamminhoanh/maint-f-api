@@ -243,6 +243,16 @@ async function buildScopeCondition(params, caller, values, _today) {
     values.callerEmpNo = caller.empNo;
     return ['d.maintainer_emp_no = @callerEmpNo'];
   }
+  // scope=scanned: thiet bi do chinh nguoi goi quet ma (temp hoac maintainer chua ai
+  // tiep quan) va dang o trang thai lam viec (bao duong / cho duyet / bi tu choi)
+  if (params.scope === 'scanned') {
+    values.callerEmpNo = caller.empNo;
+    return [
+      `((d.temp_maintainer_emp_no = @callerEmpNo
+          OR (d.maintainer_emp_no = @callerEmpNo AND d.temp_maintainer_emp_no IS NULL))
+        AND d.maintenance_status IN ('in_maintenance', 'rejected', 'pending_approval'))`,
+    ];
+  }
   // Khong truyen scope: dung tam nhin trang chu cua FE —
   // nhan vien/chu quan/van thu thay toan bo thiet bi phong ban minh
   const isDeptScope =
