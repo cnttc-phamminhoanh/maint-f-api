@@ -12,6 +12,7 @@ const {
   addDays,
   effectiveStatus,
   addMonthsClamped,
+  fmtDate,
   CYCLE_MONTHS,
 } = require('../utils/dates');
 const holidayService = require('./holiday.service');
@@ -451,10 +452,12 @@ async function listCompletedToday(factory, page, pageSize) {
     const maintainer = r.maintainer_emp_no || '';
     const active = r.temp_maintainer_emp_no || maintainer;
     const nextDue = r.max_mt_date
-      ? addMonthsClamped(new Date(r.max_mt_date), CYCLE_MONTHS[r.maintenance_type] || 1)
+      ? addMonthsClamped(fmtDate(r.max_mt_date), CYCLE_MONTHS[r.maintenance_type] || 1)
       : null;
     const todayD = new Date(`${today}T00:00:00+07:00`);
-    const daysOverdue = nextDue ? Math.max(0, Math.floor((todayD - nextDue) / 86400000)) : 0;
+    const daysOverdue = nextDue
+      ? Math.max(0, Math.floor((todayD - new Date(`${nextDue}T00:00:00+07:00`)) / 86400000))
+      : 0;
     return {
       id: r.sheet_no || r.equ_no || '',
       equNo: r.equ_no || '',
@@ -471,7 +474,7 @@ async function listCompletedToday(factory, page, pageSize) {
       activeMaintainerName: empMap.get(active) || null,
       maintenanceCycle: r.maintenance_type || '1_month',
       maintenanceStatus: 'not_due',
-      nextDueDate: nextDue ? nextDue.toISOString() : '',
+      nextDueDate: nextDue || '',
       daysOverdue,
       completedAt: r.sheet_date ? new Date(r.sheet_date).toISOString() : null,
       sheetNo: r.sheet_no || null,
