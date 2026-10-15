@@ -110,6 +110,7 @@ function effectiveMaintainerEmpNo(row) {
 
 module.exports = {
   TIME_ZONE,
+  CYCLE_MONTHS,
   businessToday,
   fmtDate,
   toIso,
