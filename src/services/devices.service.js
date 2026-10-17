@@ -989,7 +989,7 @@ async function transferFactory(id, body, userId) {
     if (updated.length === 0) throw new ApiError(404, 'Device not found');
     const basUpdated = await txQuery(
       tx,
-      `UPDATE eqm_bas SET ${basSet.join(', ')} OUTPUT inserted.eqm_no WHERE eqm_no = @equNo`,
+      `UPDATE eqm_bas SET ${basSet.join(', ')} OUTPUT inserted.equ_no WHERE equ_no = @equNo`,
       values,
     );
     if (basUpdated.length === 0) {
