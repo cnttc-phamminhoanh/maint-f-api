@@ -340,7 +340,7 @@ async function getEquipmentStatistics(params) {
   values.offset = (params.page - 1) * params.pageSize;
   values.pageSize = params.pageSize;
   const rows = await query(
-    `SELECT id, equ_no, equ_name, equ_type, equ_type_desc, equ_addr,
+    `SELECT id, equ_no, equ_name, equ_type, equ_type_desc, location,
       maintainer_emp_no, approver_emp_no, temp_maintainer_emp_no,
       maintenance_type, maintenance_status, use_date, max_mt_date, mnt_dept_no
      FROM eqm_mnt ${finalWhere}
@@ -384,7 +384,7 @@ async function getEquipmentStatistics(params) {
       equName: row.equ_name,
       equType: row.equ_type || null,
       equTypeDesc: row.equ_type_desc || null,
-      factory: row.equ_addr || null,
+      factory: row.location || null,
       maintainerEmpNo: row.maintainer_emp_no || null,
       maintainerName: row.maintainer_emp_no ? empNameMap.get(row.maintainer_emp_no) || null : null,
       responsibleEmpNo: row.approver_emp_no || null,
@@ -427,7 +427,8 @@ async function listCompletedToday(factory, page, pageSize) {
   const where = ['m.sheet_date >= @s AND m.sheet_date < @e'];
   const values = { s: dayStart, e: dayEnd };
   if (factory) {
-    where.push('d.equ_addr = @factory');
+    // 2026-10-17: equ_addr da bi xoa; ma xuong = approver_emp_no
+    where.push('d.approver_emp_no = @factory');
     values.factory = factory;
   }
   const whereSql = `WHERE ${where.join(' AND ')}`;
@@ -441,24 +442,23 @@ async function listCompletedToday(factory, page, pageSize) {
   const offset = (page - 1) * pageSize;
   const rows = await query(
     `SELECT m.sheet_no, m.sheet_date, m.equ_no, m.emp_no, m.mt_flag,
-            d.equ_name, d.equ_addr, d.equ_type, d.equ_type_desc,
+            d.equ_name, d.location, bc.base_name AS location_name, d.equ_type, d.equ_type_desc,
             d.maintainer_emp_no, d.approver_emp_no, d.temp_maintainer_emp_no,
             d.maintenance_type, d.max_mt_date, d.use_date
-      FROM eqm_mt1 m
-      LEFT JOIN eqm_mnt d ON d.equ_no = m.equ_no
-      ${whereSql}
+       FROM eqm_mt1 m
+       LEFT JOIN eqm_mnt d ON d.equ_no = m.equ_no
+       LEFT JOIN dbo.bas_base_code bc ON bc.base_code = d.location AND bc.code_type = '176'
+       ${whereSql}
       ORDER BY m.sheet_date DESC, m.sheet_no DESC
       OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`,
     values,
   );
   const empNos = new Set();
-  const deptNos = new Set();
   for (const r of rows) {
     if (r.maintainer_emp_no) empNos.add(r.maintainer_emp_no);
     if (r.approver_emp_no) empNos.add(r.approver_emp_no);
     if (r.temp_maintainer_emp_no) empNos.add(r.temp_maintainer_emp_no);
     if (r.emp_no) empNos.add(r.emp_no);
-    if (r.equ_addr) deptNos.add(r.equ_addr);
   }
   const empMap = new Map();
   if (empNos.size > 0) {
@@ -467,14 +467,6 @@ async function listCompletedToday(factory, page, pageSize) {
       Object.fromEntries([...empNos].map((e, i) => [`e${i}`, e])),
     );
     for (const r of empRows) empMap.set(r.emp_no, r.emp_name || '');
-  }
-  const deptMap = new Map();
-  if (deptNos.size > 0) {
-    const deptRows = await query(
-      `SELECT mnt_dept_no, mnt_dept_name FROM dept_mnt WHERE mnt_dept_no IN (${[...deptNos].map((_, i) => `@d${i}`).join(',')})`,
-      Object.fromEntries([...deptNos].map((e, i) => [`d${i}`, e])),
-    );
-    for (const r of deptRows) deptMap.set(r.mnt_dept_no, r.mnt_dept_name || '');
   }
   const items = rows.map((r) => {
     const maintainer = r.maintainer_emp_no || '';
@@ -492,8 +484,8 @@ async function listCompletedToday(factory, page, pageSize) {
       equName: r.equ_name || '',
       equType: r.equ_type || null,
       equTypeDesc: r.equ_type_desc || null,
-      factory: r.equ_addr || null,
-      factoryName: deptMap.get(r.equ_addr) || null,
+      factory: r.location || null,
+      factoryName: r.location_name || null,
       maintainerEmpNo: maintainer || null,
       maintainerName: empMap.get(maintainer) || null,
       responsibleEmpNo: r.approver_emp_no || null,

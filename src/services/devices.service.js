@@ -42,14 +42,13 @@ function nextDueSql() {
 const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
   d.maintenance_type, d.maintenance_status, d.completion_requested_at, d.rejection_reason,
   d.maintainer_emp_no, d.approver_emp_no, d.temp_maintainer_emp_no, d.temp_maintainer_date,
-  d.equ_addr, d.equ_dept_no, d.equ_type, d.equ_type_desc, d.mnt_dept_no, d.pending_maintenance_items,
-  COALESCE(b1.dept_name, b2.dept_name) AS equ_addr_name`;
+  d.location, d.equ_type, d.equ_type_desc, d.mnt_dept_no, d.pending_maintenance_items,
+  bc.base_name AS location_name`;
 
-// 2026-10-10: vi tri thiet bi = ten phong ban trong bas_dept;
-// uu tien equ_addr, khong khop thi fallback equ_dept_no (user da check SELECT nay)
+// 2026-10-17: vi tri thiet bi = bas_base_code.base_name (code_type '176')
+// theo cot eqm_mnt.location (cot equ_addr da bi user xoa, join bas_dept bo)
 const DEVICE_FROM = `FROM eqm_mnt d
-  LEFT JOIN dbo.bas_dept b1 ON b1.dept_no = d.equ_addr
-  LEFT JOIN dbo.bas_dept b2 ON b2.dept_no = d.equ_dept_no`;
+  LEFT JOIN dbo.bas_base_code bc ON bc.base_code = d.location AND bc.code_type = '176'`;
 
 const EMPTY_COUNTS = {
   dueCounts: { all: 0, overdue: 0, today: 0, tomorrow: 0, later: 0 },
@@ -156,8 +155,12 @@ function toDeviceRecord(row, empNameMap, today, xuongMap) {
         : null,
     isTemporaryHandover: isTempActive(row, today),
     rejectionReason: row.rejection_reason || '',
-    factory: row.equ_addr || '',
-    factoryName: row.equ_addr_name || '',
+    // 2026-10-17: equ_addr da bi xoa; ma xuong hien tai = approver_emp_no
+    // (FE transfer dung factory de loai xuong hien tai khoi dropdown)
+    factory: row.approver_emp_no || '',
+    factoryName: '',
+    location: row.location || '',
+    locationName: row.location_name || '',
     equType: row.equ_type || '',
     equTypeDesc: row.equ_type_desc || '',
   };
@@ -968,8 +971,9 @@ async function transferFactory(id, body, userId) {
     maintainerTarget = { empNo: target.emp_no, departmentId: target.mnt_dept_no || null };
   }
 
-  const set = ['approver_emp_no = @approver', 'equ_addr = @factory'];
-  const values = { approver: body.targetFactory, factory: body.targetFactory, id };
+  // 2026-10-17: equ_addr da bi user xoa; chi can cap nhat ma xuong = approver
+  const set = ['approver_emp_no = @approver'];
+  const values = { approver: body.targetFactory, id };
   if (maintainerTarget) {
     set.push(
       'maintainer_emp_no = @newMaintainer',
