@@ -1,4 +1,5 @@
 const { query, inClauseSafe } = require('../db');
+const workshopService = require('./workshop.service');
 const {
   queryList,
   buildDeptHistory,
@@ -228,7 +229,8 @@ async function getEquipmentStatistics(params) {
     values.empNo = params.empNo;
   }
   if (params.respEmpNo) {
-    conditions.push('approver = @respEmpNo');
+    // 2026-10-17: approver = l_code; loc thiet bi thuoc nhom duyet co nguoi nay
+    conditions.push('approver IN (SELECT l_code FROM eqm_bas_user WHERE emp_no = @respEmpNo)');
     values.respEmpNo = params.respEmpNo;
   }
   if (params.maintType) {
@@ -352,10 +354,13 @@ async function getEquipmentStatistics(params) {
   const empNos = [
     ...new Set(
       rows
-        .flatMap((r) => [r.maintainer_emp_no, r.approver_emp_no, r.temp_maintainer_emp_no])
+        .flatMap((r) => [r.maintainer_emp_no, r.temp_maintainer_emp_no])
         .filter(Boolean),
     ),
   ];
+  // 2026-10-17: approver = l_code; Nguoi chiu trach nhiem = approver dau tien cua nhom
+  const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
+  const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const empNameMap = new Map();
   if (empNos.length > 0) {
     const { sql: inSql, params } = inClauseSafe(empNos, 'e');
@@ -372,6 +377,9 @@ async function getEquipmentStatistics(params) {
     };
     const nextDue = holidayService.getAdjustedDueDay(device);
     const daysOverdue = Math.max(0, -daysBetween(today, nextDue));
+    const resp = row.approver_emp_no
+      ? firstApproverMap.get(row.approver_emp_no) || null
+      : null;
     const activeEmpNo =
       row.maintenance_status === 'in_maintenance' ||
       row.maintenance_status === 'pending_approval' ||
@@ -387,8 +395,8 @@ async function getEquipmentStatistics(params) {
       factory: row.location || null,
       maintainerEmpNo: row.maintainer_emp_no || null,
       maintainerName: row.maintainer_emp_no ? empNameMap.get(row.maintainer_emp_no) || null : null,
-      responsibleEmpNo: row.approver_emp_no || null,
-      responsibleName: row.approver_emp_no ? empNameMap.get(row.approver_emp_no) || null : null,
+      responsibleEmpNo: resp ? resp.empNo || null : null,
+      responsibleName: resp ? resp.empName || null : null,
       activeMaintainerEmpNo: activeEmpNo,
       activeMaintainerName: activeEmpNo ? empNameMap.get(activeEmpNo) || null : null,
       maintenanceCycle: ALL_CYCLES.includes(row.maintenance_type) ? row.maintenance_type : '1_month',
@@ -411,9 +419,12 @@ async function getEquipmentStatistics(params) {
   );
   const empOptions = allEmpRows.map((e) => ({ empNo: e.emp_no, empName: e.emp_name || e.emp_no }));
 
+  // 2026-10-17: nguoi chiu trach nhiem chi den tu nhom duyet eqm_bas_user
   const allRespRows = await query(
-    `SELECT emp_no, emp_name FROM emp_mnt
-     WHERE position IN ('chu_quan', 'approver', 'van_thu') ORDER BY emp_no ASC`,
+    `SELECT DISTINCT u.emp_no, ISNULL(e.emp_name, u.emp_name) AS emp_name
+       FROM eqm_bas_user u
+       LEFT JOIN emp_mnt e ON e.emp_no = u.emp_no
+      ORDER BY u.emp_no ASC`,
   );
   const respOptions = allRespRows.map((e) => ({ empNo: e.emp_no, empName: e.emp_name || e.emp_no }));
 
@@ -456,10 +467,12 @@ async function listCompletedToday(factory, page, pageSize) {
   const empNos = new Set();
   for (const r of rows) {
     if (r.maintainer_emp_no) empNos.add(r.maintainer_emp_no);
-    if (r.approver_emp_no) empNos.add(r.approver_emp_no);
     if (r.temp_maintainer_emp_no) empNos.add(r.temp_maintainer_emp_no);
     if (r.emp_no) empNos.add(r.emp_no);
   }
+  // 2026-10-17: approver = l_code; Nguoi chiu trach nhiem = approver dau tien cua nhom
+  const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
+  const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const empMap = new Map();
   if (empNos.size > 0) {
     const empRows = await query(
@@ -471,6 +484,7 @@ async function listCompletedToday(factory, page, pageSize) {
   const items = rows.map((r) => {
     const maintainer = r.maintainer_emp_no || '';
     const active = r.temp_maintainer_emp_no || maintainer;
+    const resp = r.approver_emp_no ? firstApproverMap.get(r.approver_emp_no) || null : null;
     const nextDue = r.max_mt_date
       ? addMonthsClamped(fmtDate(r.max_mt_date), CYCLE_MONTHS[r.maintenance_type] || 1)
       : null;
@@ -488,8 +502,8 @@ async function listCompletedToday(factory, page, pageSize) {
       factoryName: r.location_name || null,
       maintainerEmpNo: maintainer || null,
       maintainerName: empMap.get(maintainer) || null,
-      responsibleEmpNo: r.approver_emp_no || null,
-      responsibleName: empMap.get(r.approver_emp_no) || null,
+      responsibleEmpNo: resp ? resp.empNo || null : null,
+      responsibleName: resp ? resp.empName || null : null,
       activeMaintainerEmpNo: active || null,
       activeMaintainerName: empMap.get(active) || null,
       maintenanceCycle: r.maintenance_type || '1_month',

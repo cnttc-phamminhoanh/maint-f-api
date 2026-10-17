@@ -66,10 +66,10 @@ async function computeCurrentDelayed() {
             completion_requested_at
      FROM eqm_mnt`,
   );
-  // 2026-10-09: approver (cot approver_emp_no cu, doi ten 2026-10-17) = ma phan xuong; chiu trach nhiem cho duyet =
-  // chu quan xuong. Chua co du lieu xuong_mnt thi fallback ve ma cu (MNV)
-  const xuongCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
-  const xuongMap = await workshopService.getXuongHeadMap(xuongCodes);
+  // 2026-10-17: approver = l_code (eqm_bas_user); chiu trach nhiem cho duyet =
+  // approver dau tien cua nhom l_code. Nhom chua co thanh vien -> null
+  const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
+  const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const today = businessToday();
   const current = new Map();
   for (const row of rows) {
@@ -106,9 +106,9 @@ async function computeCurrentDelayed() {
         ? responsibleForReason(employeeReason, row)
         : null,
       approverResponsible:
-        row.approver_emp_no && xuongMap.get(row.approver_emp_no)
-          ? xuongMap.get(row.approver_emp_no).headEmpNo || null
-          : row.approver_emp_no || null,
+        row.approver_emp_no && firstApproverMap.get(row.approver_emp_no)
+          ? firstApproverMap.get(row.approver_emp_no).empNo || null
+          : null,
       awaitingStart,
       employeeOccurredAt: addDays(due, 1),
     });

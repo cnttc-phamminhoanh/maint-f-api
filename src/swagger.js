@@ -13,7 +13,7 @@ function buildSpec(baseUrl) {
         'API bao tri thiet bi chay local, noi voi SQL Server cua ung dung. ' +
         'Mo phong dung hop dong voi backend NestJS cloud.\n\n' +
         '**Danh tinh**: moi request co token deu bi chot theo phien — truyen MNV/id cua nguoi khac bi tu choi (403 TOKEN_USER_MISMATCH).\n' +
-        '**Luong duyet**: `approver` (cot approver_emp_no cu) tren thiet bi la MA PHAN XUONG; nhom duyet = chu quan + pho quan 1/2 trong `xuong_mnt` + chu quan/van thu bo phan thiet bi.',
+        '**Luong duyet (2026-10-17)**: `approver` tren thiet bi la L_CODE; nhom duyet = moi thanh vien `eqm_bas_user` co l_code do (chi chua approver / chu quan / van thu, khong co nhan vien bao tri). Admin duyet duoc tat ca.',
     },
     servers: [{ url: baseUrl }],
     tags: [
@@ -449,8 +449,8 @@ function buildSpec(baseUrl) {
       '/api/devices/factories': {
         get: {
           tags: ['devices'],
-          summary: 'Danh sach phan xuong de chuyen',
-          description: 'Can token. Danh sach phan xuong (xuong_mnt) dung trong man hinh chuyen phan xuong.',
+          summary: 'Danh sach nhom phan xuong de chuyen',
+          description: 'Can token. Danh sach l_code phan biet trong eqm_bas_user, ten hien base_name (bas_base_code code_type 176), dung trong man hinh chuyen phan xuong.',
           responses: { 200: { description: '{ factories }' } },
         },
       },
@@ -474,8 +474,8 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Duyet hang loat',
           description:
-            'Can token. Chi duyet duoc thiet bi pending_approval thuoc pham vi cua minh: bo phan minh (chu quan/van thu) hoac phan xuong minh la thanh vien nhom duyet. ' +
-            'Duyet thanh cong: trang thai = not_due, max_mt_date = ngay hien tai, tao don eqm_mt1/eqm_mt2, dong episode tre han, gui push cho nhom duyet con lai + nguoi gui + chu quan/van thu bo phan.',
+            'Can token. Chi duyet duoc thiet bi pending_approval thuoc nhom l_code cua minh trong eqm_bas_user (admin duyet tat ca). ' +
+            'Duyet thanh cong: trang thai = not_due, max_mt_date = ngay hien tai, tao don eqm_mt1/eqm_mt2, dong episode tre han, gui push cho nhom duyet con lai + nguoi gui.',
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -505,7 +505,7 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Tu choi hang loat',
           description:
-            'Can token. Pham vi nhu duyet hang loat (bo phan minh hoac phan xuong minh). Tu choi: trang thai = rejected, giu ly do; episode tre han van duoc tinh (doi cron doi reason thanh rejected).',
+            'Can token. Pham vi nhu duyet hang loat (nhom l_code cua minh, admin tat ca). Tu choi: trang thai = rejected, giu ly do; episode tre han van duoc tinh (doi cron doi reason thanh rejected).',
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -587,7 +587,7 @@ function buildSpec(baseUrl) {
             'Can token. Chi nguoi dang bao duong (temp ?? phu trach chinh) hoac admin moi duoc gui. ' +
             'in_maintenance: bat buoc truyen itemIds (cac hang muc da chon); rejected: gui lai, itemIds tuy chon. ' +
             'Du lieu: trang thai = pending_approval, snapshot hang muc vao pending_maintenance_items, completion_requested_at = GETDATE(); ' +
-            'episode tre han duoc treo; push gui den nhom duyet phan xuong + chu quan/van thu bo phan.',
+            'episode tre han duoc treo; push gui den moi thanh vien nhom l_code cua thiet bi trong eqm_bas_user.',
           security: [{ bearerAuth: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
@@ -648,7 +648,7 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Chuyen phan xuong',
           description:
-            'Can token. Doi approver sang ma phan xuong moi. ' +
+            'Can token. Doi approver sang l_code moi (phai ton tai trong eqm_bas_user). ' +
             'Neu truyen newMaintainerId: gan lai nguoi phu trach, xoa tiep quan tam thoi va chuyen bo phan theo nguoi phu trach moi. ' +
             'Quyen: admin duoc chuyen tat ca; nhan vien/chu quan/van thu chi duoc chuyen thiet bi trong bo phan minh.',
           security: [{ bearerAuth: [] }],
@@ -682,7 +682,7 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Xac nhan hoan thanh bao duong',
           description:
-            'Can token. Quyen duyet (thoa 1 trong 3): thanh vien nhom duyet phan xuong (chu quan / pho quan 1 / pho quan 2 trong xuong_mnt), chu quan hoac van thu bo phan thiet bi, hoac chinh nguoi dang bao duong thiet bi do. ' +
+            'Can token. Quyen duyet: thanh vien nhom l_code cua thiet bi trong eqm_bas_user (approver / chu quan / van thu), hoac admin. Nhan vien bao tri bi chan tu duyet don cua chinh minh. ' +
             'Thanh cong: trang thai = not_due, max_mt_date = ngay hien tai, xoa temp va snapshot hang muc, tao don eqm_mt1/eqm_mt2 (check_user = nguoi duyet, check_date = luc duyet), dong episode tre han va gui push thong bao.',
           security: [{ bearerAuth: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -711,7 +711,7 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Tu choi hoan thanh bao duong',
           description:
-            'Can token. Quyen tu choi: thanh vien nhom duyet phan xuong hoac chu quan/van thu bo phan thiet bi (nhan vien bao duong khong duoc tu choi). ' +
+            'Can token. Quyen tu choi: thanh vien nhom l_code cua thiet bi trong eqm_bas_user, hoac admin (nhan vien bao duong khong duoc tu choi). ' +
             'Tu choi: trang thai = rejected, luu ly do; temp van giu de nguoi dang lam tiep tuc khac phuc; episode tre han duoc tinh (cron doi reason thanh rejected).',
           security: [{ bearerAuth: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -891,7 +891,7 @@ function buildSpec(baseUrl) {
           tags: ['xuongs'],
           summary: 'Phan xuong cua nguoi dang nhap',
           description:
-            'Can token. Tra ve cac phan xuong ma nguoi dang nhap la thanh vien nhom duyet (chu quan / pho quan 1 / pho quan 2 trong xuong_mnt). ' +
+            'Can token. Tra ve cac l_code ma nguoi dang nhap la thanh vien nhom duyet trong eqm_bas_user (chi chua approver / chu quan / van thu). ' +
             'Giao dien dung de quyet dinh hien menu "Thiet bi can duyet" va trang /dept-approval.',
           security: [{ bearerAuth: [] }],
           responses: {

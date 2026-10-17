@@ -106,14 +106,16 @@ async function getEmpNameMap(empNos) {
   return map;
 }
 
-function toDeviceRecord(row, empNameMap, today, xuongMap) {
+function toDeviceRecord(row, empNameMap, today, firstApproverMap, factoryNameMap) {
   const effectiveId = effectiveMaintainerEmpNo(row, today);
   const maintainerId = row.maintainer_emp_no || '';
-  // 2026-10-09: approver (cot approver_emp_no, doi ten 2026-10-17) = ma phan xuong; Nguoi quan ly = chu quan xuong.
-  // Chua co du lieu xuong_mnt thi fallback ve gia tri cu (MNV)
+  // 2026-10-17: approver = l_code (eqm_bas_user); Nguoi quan ly = approver dau tien
+  // cua nhom l_code (emp_no nho nhat). Nhom chua co thanh vien -> khong co quan ly
   const managerCode = row.approver_emp_no || '';
-  const xuong = managerCode && xuongMap ? xuongMap.get(managerCode) : undefined;
-  const managerId = xuong ? (xuong.headEmpNo || '') : managerCode;
+  const firstApprover = managerCode && firstApproverMap
+    ? firstApproverMap.get(managerCode)
+    : undefined;
+  const managerId = firstApprover ? (firstApprover.empNo || '') : '';
   const adjustedDue = holidayService.shiftPastHolidays(
     getNextDueDay({
       startDate: row.use_date,
@@ -155,10 +157,13 @@ function toDeviceRecord(row, empNameMap, today, xuongMap) {
         : null,
     isTemporaryHandover: isTempActive(row, today),
     rejectionReason: row.rejection_reason || '',
-    // 2026-10-17: equ_addr da bi xoa; ma xuong hien tai = approver (cot approver_emp_no cu)
-    // (FE transfer dung factory de loai xuong hien tai khoi dropdown)
+    // 2026-10-17: approver = l_code (eqm_bas_user); factoryName = base_name cua l_code
+    // (FE transfer dung factory de loai nhom hien tai khoi dropdown)
     factory: row.approver_emp_no || '',
-    factoryName: '',
+    factoryName:
+      row.approver_emp_no && factoryNameMap
+        ? factoryNameMap.get(row.approver_emp_no) || ''
+        : '',
     location: row.location || '',
     locationName: row.location_name || '',
     equType: row.equ_type || '',
@@ -166,21 +171,37 @@ function toDeviceRecord(row, empNameMap, today, xuongMap) {
   };
 }
 
+// Map l_code -> base_name (cung nguon voi Vi tri dat thiet bi)
+async function getFactoryNameMap(lCodes) {
+  const map = new Map();
+  if (!lCodes || lCodes.length === 0) return map;
+  const { sql, params } = inClauseSafe(lCodes, 'b');
+  const rows = await query(
+    `SELECT base_code, base_name FROM dbo.bas_base_code
+      WHERE code_type = '176' AND base_code IN (${sql})`,
+    params,
+  );
+  for (const r of rows) map.set(r.base_code, r.base_name || '');
+  return map;
+}
+
 async function enrichRecords(rows, today) {
   await holidayService.ensureHolidaysLoaded();
-  const xuongCodes = [...new Set(rows.map((row) => row.approver_emp_no).filter(Boolean))];
-  const xuongMap = await workshopService.getXuongHeadMap(xuongCodes);
+  // 2026-10-17: approver = l_code (eqm_bas_user); Nguoi quan ly = approver dau tien cua nhom
+  const lCodes = [...new Set(rows.map((row) => row.approver_emp_no).filter(Boolean))];
+  const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
+  const factoryNameMap = await getFactoryNameMap(lCodes);
   const empNos = [];
   for (const row of rows) {
     const effective = effectiveMaintainerEmpNo(row, today);
     if (effective) empNos.push(effective);
     if (row.maintainer_emp_no) empNos.push(row.maintainer_emp_no);
   }
-  for (const info of xuongMap.values()) {
-    if (info.headEmpNo) empNos.push(info.headEmpNo);
+  for (const info of firstApproverMap.values()) {
+    if (info.empNo) empNos.push(info.empNo);
   }
   const map = await getEmpNameMap(empNos);
-  return rows.map((row) => toDeviceRecord(row, map, today, xuongMap));
+  return rows.map((row) => toDeviceRecord(row, map, today, firstApproverMap, factoryNameMap));
 }
 
 function assertCanMaintain(caller, row, today) {
@@ -209,37 +230,17 @@ async function getDeviceById(id) {
 
 // ==== Danh sach thiet bi ====
 
-// 2026-10-09: duyet theo bo phan — chu quan / van thu duoc duyet thiet bi
-// cho duyet trong dung bo phan cua minh, chay song song voi thanh vien phan xuong
-function isDeptApprovalAllowed(requester, row) {
-  return (
-    isDeptManagerPosition(requester.position || '') &&
-    !!requester.mnt_dept_no &&
-    row.mnt_dept_no === requester.mnt_dept_no
-  );
-}
-
 async function buildScopeCondition(params, caller, values, _today) {
-  // 2026-10-09: thiet bi can duyet = pending_approval cua
-  // (a) bo phan minh (chu quan / van thu) hoac (b) phan xuong minh la thanh vien
+  // 2026-10-17: thiet bi can duyet = pending_approval ma nhom l_code
+  // (eqm_bas_user) cua thiet bi co chua nguoi goi (approver / chu quan / van thu)
   if (params.approvalOnly) {
-    const canDeptApprove =
-      isDeptManagerPosition(caller.position) && !!caller.departmentId;
-    const xuongNos = await workshopService.getMemberXuongNos(caller.empNo);
-    if (!canDeptApprove && xuongNos.length === 0) return null;
-    const orParts = [];
-    if (canDeptApprove) {
-      values.callerDept = caller.departmentId;
-      orParts.push('d.mnt_dept_no = @callerDept');
-    }
-    if (xuongNos.length > 0) {
-      const { sql, params: xParams } = inClause(xuongNos, 'x');
-      Object.assign(values, xParams);
-      orParts.push(`d.approver IN (${sql})`);
-    }
+    const lCodes = await workshopService.getMemberLCodes(caller.empNo);
+    if (lCodes.length === 0) return null;
+    const { sql, params: xParams } = inClause(lCodes, 'x');
+    Object.assign(values, xParams);
     return [
       'd.maintenance_status = \'pending_approval\'',
-      `(${orParts.join(' OR ')})`,
+      `d.approver IN (${sql})`,
     ];
   }
   if (params.scope === 'mine') {
@@ -271,9 +272,9 @@ async function buildScopeCondition(params, caller, values, _today) {
   case 'admin':
     return [];
   case 'approver': {
-    const xuongNos = await workshopService.getMemberXuongNos(caller.empNo);
-    if (xuongNos.length === 0) return ['1 = 0'];
-    const { sql, params: xParams } = inClause(xuongNos, 'x');
+    const lCodes = await workshopService.getMemberLCodes(caller.empNo);
+    if (lCodes.length === 0) return ['1 = 0'];
+    const { sql, params: xParams } = inClause(lCodes, 'x');
     Object.assign(values, xParams);
     return [`d.maintenance_status = 'pending_approval' AND d.approver IN (${sql})`];
   }
@@ -480,10 +481,10 @@ async function lookupDeviceByQr(qr, userId) {
 
 async function listManagedDevices(userId, sortBy, page, pageSize) {
   const caller = await getCaller(userId);
-  const xuongNos = await workshopService.getMemberXuongNos(caller.empNo);
-  if (xuongNos.length === 0) return { items: [], total: 0, page, pageSize };
+  const lCodes = await workshopService.getMemberLCodes(caller.empNo);
+  if (lCodes.length === 0) return { items: [], total: 0, page, pageSize };
   const today = businessToday();
-  const { sql: mgrInSql, params: mgrParams } = inClause(xuongNos, 'x');
+  const { sql: mgrInSql, params: mgrParams } = inClause(lCodes, 'x');
   const where = `WHERE d.approver IN (${mgrInSql})`;
   const values = { ...mgrParams };
 
@@ -514,19 +515,13 @@ async function listFactories(userId) {
     MAINTAINER_POSITIONS.includes(caller.position) ||
     caller.position === 'van_thu';
   if (!allowed) throw new ApiError(403, 'not allowed');
-  // 2026-10-09: danh sach phan xuong tu bang xuong_mnt; approver = chu quan xuong
-  const rows = await workshopService.listAllXuong();
+  // 2026-10-17: dropdown = l_code phan biet trong eqm_bas_user,
+  // ten hien base_name (bas_base_code, code_type 176), khong kem ten approver
+  const rows = await workshopService.listLCodeOptions();
   const items = rows.map((row) => {
-    const head = row.chu_quan_emp_no || '';
     return {
-      factory: row.xuong_no,
-      // 2026-10-10: dropdown hien ten phong ban (bas_dept.dept_name) thay ma xuong
-      factoryName: row.xuong_dept_name || row.xuong_name || row.xuong_no,
-      approver: {
-        userId: head,
-        empNo: head,
-        empName: row.emp_name || row.xuong_name || row.xuong_no,
-      },
+      factory: row.l_code,
+      factoryName: row.base_name || row.l_code,
     };
   });
   return { items };
@@ -667,8 +662,8 @@ async function finalizePendingOrder(tx, row, approverEmpNo, today) {
   return sheetNo;
 }
 
-// 2026-10-09: bo duyet theo bo phan (chu_quan/van_thu) — xet duyet chi con
-// theo thanh vien phan xuong trong bang xuong_mnt
+// 2026-10-17: xet duyet theo nhom l_code trong bang eqm_bas_user
+// (chi chua approver / chu quan / van thu); khong con duyet theo bo phan
 async function submitApproval(id, userId, itemIds) {
   const caller = await getCaller(userId);
   const row = await getDeviceRow(id);
@@ -764,9 +759,9 @@ async function approveCompletion(id, userId) {
   ) {
     throw new ApiError(403, 'not allowed');
   }
-  const isMember = await workshopService.isMemberOfXuong(requester.emp_no, row.approver_emp_no);
-  const isDept = isDeptApprovalAllowed(requester, row);
-  if (!isMember && !isDept) throw new ApiError(403, 'not allowed');
+  // 2026-10-17: quyen duyet = thanh vien nhom l_code (eqm_bas_user) cua thiet bi, hoac admin
+  const isMember = await workshopService.isMemberOfLCode(requester.emp_no, row.approver_emp_no);
+  if (!isMember && requester.position !== 'admin') throw new ApiError(403, 'not allowed');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -805,9 +800,8 @@ async function rejectCompletion(id, userId, reason) {
   if (!requester) throw new ApiError(404, 'User not found');
   const row = await getDeviceRow(id);
   if (!row) throw new ApiError(404, 'Device not found');
-  const isMember = await workshopService.isMemberOfXuong(requester.emp_no, row.approver_emp_no);
-  const isDept = isDeptApprovalAllowed(requester, row);
-  if (!isMember && !isDept) throw new ApiError(403, 'not owner');
+  const isMember = await workshopService.isMemberOfLCode(requester.emp_no, row.approver_emp_no);
+  if (!isMember && requester.position !== 'admin') throw new ApiError(403, 'not owner');
   if (row.maintenance_status !== 'pending_approval') {
     throw new ApiError(400, 'Device is not pending approval');
   }
@@ -829,21 +823,18 @@ async function bulkApproveCompletion(ids, userId) {
   if (!requester) throw new ApiError(404, 'User not found');
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
   const today = businessToday();
-  const canDeptApprove =
-    isDeptManagerPosition(requester.position || '') && !!requester.mnt_dept_no;
-  const xuongNos = await workshopService.getMemberXuongNos(requester.emp_no);
-  if (!canDeptApprove && xuongNos.length === 0) {
+  const isAdmin = requester.position === 'admin';
+  const lCodes = await workshopService.getMemberLCodes(requester.emp_no);
+  if (!isAdmin && lCodes.length === 0) {
     return { success: true, processed: 0 };
   }
   const { sql: inSql, params } = inClause(ids, 'id');
   const scopeParts = [];
   const scopeParams = {};
-  if (canDeptApprove) {
-    scopeParts.push('d.mnt_dept_no = @callerDept');
-    scopeParams.callerDept = requester.mnt_dept_no;
-  }
-  if (xuongNos.length > 0) {
-    const { sql: xSql, params: xParams } = inClause(xuongNos, 'x');
+  if (isAdmin) {
+    scopeParts.push('1 = 1');
+  } else {
+    const { sql: xSql, params: xParams } = inClause(lCodes, 'x');
     scopeParts.push(`d.approver IN (${xSql})`);
     Object.assign(scopeParams, xParams);
   }
@@ -899,21 +890,18 @@ async function bulkRejectCompletion(ids, userId, reason) {
   const requester = await resolveUser(userId);
   if (!requester) throw new ApiError(404, 'User not found');
   if (!ids || ids.length === 0) throw new ApiError(400, 'ids is required');
-  const canDeptApprove =
-    isDeptManagerPosition(requester.position || '') && !!requester.mnt_dept_no;
-  const xuongNos = await workshopService.getMemberXuongNos(requester.emp_no);
-  if (!canDeptApprove && xuongNos.length === 0) {
+  const isAdmin = requester.position === 'admin';
+  const lCodes = await workshopService.getMemberLCodes(requester.emp_no);
+  if (!isAdmin && lCodes.length === 0) {
     return { success: true, processed: 0 };
   }
   const { sql: inSql, params } = inClause(ids, 'id');
   const scopeParts = [];
   const scopeParams = {};
-  if (canDeptApprove) {
-    scopeParts.push('mnt_dept_no = @callerDept');
-    scopeParams.callerDept = requester.mnt_dept_no;
-  }
-  if (xuongNos.length > 0) {
-    const { sql: xSql, params: xParams } = inClause(xuongNos, 'x');
+  if (isAdmin) {
+    scopeParts.push('1 = 1');
+  } else {
+    const { sql: xSql, params: xParams } = inClause(lCodes, 'x');
     scopeParts.push(`approver IN (${xSql})`);
     Object.assign(scopeParams, xParams);
   }
@@ -954,9 +942,9 @@ async function transferFactory(id, body, userId) {
   if (caller.position !== 'admin' && row.mnt_dept_no !== caller.departmentId) {
     throw new ApiError(403, 'Device belongs to another department');
   }
-  // 2026-10-09: dich chuyen theo phan xuong — approver (cot approver_emp_no cu, doi ten 2026-10-17) = ma phan xuong
-  const xuong = await workshopService.getXuong(body.targetFactory);
-  if (!xuong) throw new ApiError(400, 'Factory not found');
+  // 2026-10-17: dich chuyen theo l_code (eqm_bas_user); ghi l_code vao approver
+  const hasGroup = await workshopService.lCodeExists(body.targetFactory);
+  if (!hasGroup) throw new ApiError(400, 'Factory not found');
 
   let maintainerTarget = null;
   if (body.newMaintainerId) {

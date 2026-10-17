@@ -1,101 +1,118 @@
 const { query, queryOne } = require('../db');
 
-// Phan xuong (xuong_mnt): moi xuong co toi da 3 thanh vien
-// (chu quan xuong + pho chu quan 1 + pho chu quan 2).
-// eqm_mnt.approver (cot approver_emp_no doi ten 2026-10-17) chua ma phan xuong; xet duyet gui cho
-// tat ca thanh vien cua phan xuong do (2026-10-09).
+// Nhom duyet (2026-10-17 user chot): bang eqm_bas_user (l_code + emp_no),
+// chi chua approver / chu quan / van thu (khong co nhan_vien_bao_tri).
+// eqm_mnt.approver chua l_code; quyen duyet = moi thanh vien eqm_bas_user
+// co l_code do. Bang xuong_mnt khong con duoc dung trong luong duyet.
 
-async function getMemberXuongNos(empNo) {
+async function getMemberLCodes(empNo) {
   if (!empNo) return [];
   const rows = await query(
-    `SELECT xuong_no FROM xuong_mnt
-      WHERE chu_quan_emp_no = @e OR pho_quan_1_emp_no = @e OR pho_quan_2_emp_no = @e
-      ORDER BY xuong_no ASC`,
+    'SELECT l_code FROM eqm_bas_user WHERE emp_no = @e ORDER BY l_code ASC',
     { e: empNo },
   );
-  return rows.map((r) => r.xuong_no);
+  return rows.map((r) => r.l_code);
 }
 
-async function isMemberOfXuong(empNo, xuongNo) {
-  if (!empNo || !xuongNo) return false;
+async function isMemberOfLCode(empNo, lCode) {
+  if (!empNo || !lCode) return false;
   const row = await queryOne(
-    `SELECT TOP 1 xuong_no FROM xuong_mnt
-      WHERE xuong_no = @x
-        AND (chu_quan_emp_no = @e OR pho_quan_1_emp_no = @e OR pho_quan_2_emp_no = @e)`,
-    { x: xuongNo, e: empNo },
+    'SELECT TOP 1 l_code FROM eqm_bas_user WHERE l_code = @l AND emp_no = @e',
+    { l: lCode, e: empNo },
   );
   return Boolean(row);
 }
 
-async function getXuong(xuongNo) {
-  if (!xuongNo) return null;
-  return queryOne(
-    'SELECT xuong_no, xuong_name, chu_quan_emp_no FROM xuong_mnt WHERE xuong_no = @x',
-    { x: xuongNo },
+async function lCodeExists(lCode) {
+  if (!lCode) return false;
+  const row = await queryOne(
+    'SELECT TOP 1 l_code FROM eqm_bas_user WHERE l_code = @l',
+    { l: lCode },
   );
+  return Boolean(row);
 }
 
-// Map ma phan xuong -> {xuongNo, xuongName, headEmpNo} (chu quan xuong)
-async function getXuongHeadMap(codes) {
+// Map l_code -> [{empNo, empName, position}] theo emp_no ASC
+// (phan tu dau = approver dau tien = Nguoi quan ly thiet bi)
+async function getGroupMembersMap(lCodes) {
   const map = new Map();
-  if (!codes || codes.length === 0) return map;
+  if (!lCodes || lCodes.length === 0) return map;
   const params = {};
-  const placeholders = codes.map((c, i) => {
-    params[`x${i}`] = c;
-    return `@x${i}`;
+  const placeholders = lCodes.map((c, i) => {
+    params[`l${i}`] = c;
+    return `@l${i}`;
   });
   const rows = await query(
-    `SELECT xuong_no, xuong_name, chu_quan_emp_no FROM xuong_mnt
-      WHERE xuong_no IN (${placeholders.join(',')})`,
+    `SELECT u.l_code, u.emp_no, ISNULL(e.emp_name, u.emp_name) AS emp_name,
+            ISNULL(e.position, '') AS position
+       FROM eqm_bas_user u
+       LEFT JOIN emp_mnt e ON e.emp_no = u.emp_no
+      WHERE u.l_code IN (${placeholders.join(',')})
+      ORDER BY u.l_code ASC, u.emp_no ASC`,
     params,
   );
   for (const r of rows) {
-    map.set(r.xuong_no, {
-      xuongNo: r.xuong_no,
-      xuongName: r.xuong_name || '',
-      headEmpNo: r.chu_quan_emp_no || '',
+    if (!map.has(r.l_code)) map.set(r.l_code, []);
+    map.get(r.l_code).push({
+      empNo: r.emp_no,
+      empName: r.emp_name || '',
+      position: r.position || '',
     });
   }
   return map;
 }
 
-async function listAllXuong() {
-  // 2026-10-10: ten phan xuong lay tu bas_dept.dept_name (xuong_no = dept_no)
+async function getGroupMembers(lCode) {
+  if (!lCode) return [];
+  const map = await getGroupMembersMap([lCode]);
+  return map.get(lCode) || [];
+}
+
+// Map l_code -> approver dau tien (emp_no nho nhat, co dinh)
+async function getFirstApproverMap(lCodes) {
+  const groups = await getGroupMembersMap(lCodes);
+  const map = new Map();
+  for (const [lCode, members] of groups) {
+    if (members.length > 0) map.set(lCode, members[0]);
+  }
+  return map;
+}
+
+// Dropdown chuyen phan xuong: l_code phan biet trong eqm_bas_user +
+// ten base_name (bas_base_code, code_type 176 — cung nguon voi Vi tri dat thiet bi)
+async function listLCodeOptions() {
   return query(
-    `SELECT x.xuong_no, x.xuong_name, x.chu_quan_emp_no, e.emp_name,
-            bd.dept_name AS xuong_dept_name
-      FROM xuong_mnt x
-      LEFT JOIN emp_mnt e ON e.emp_no = x.chu_quan_emp_no
-      LEFT JOIN dbo.bas_dept bd ON bd.dept_no = x.xuong_no
-      ORDER BY x.xuong_no ASC`,
+    `SELECT u.l_code, bc.base_name
+       FROM (SELECT DISTINCT l_code FROM eqm_bas_user) u
+       LEFT JOIN dbo.bas_base_code bc
+         ON bc.base_code = u.l_code AND bc.code_type = '176'
+      ORDER BY COALESCE(bc.base_name, u.l_code) ASC`,
   );
 }
 
+// Nhom l_code cua thanh vien dang nhap — FE dung quyet dinh hien menu
+// "Thiet bi can duyet" va guard trang /dept-approval
 async function getMyWorkshops(empNo) {
   if (!empNo) return [];
   const rows = await query(
-    `SELECT xuong_no, xuong_name, chu_quan_emp_no, pho_quan_1_emp_no, pho_quan_2_emp_no
-      FROM xuong_mnt
-      WHERE chu_quan_emp_no = @e OR pho_quan_1_emp_no = @e OR pho_quan_2_emp_no = @e
-      ORDER BY xuong_no ASC`,
+    `SELECT u.l_code, bc.base_name
+       FROM eqm_bas_user u
+       LEFT JOIN dbo.bas_base_code bc
+         ON bc.base_code = u.l_code AND bc.code_type = '176'
+      WHERE u.emp_no = @e
+      ORDER BY COALESCE(bc.base_name, u.l_code) ASC`,
     { e: empNo },
   );
-  return rows.map((r) => ({
-    xuongNo: r.xuong_no,
-    xuongName: r.xuong_name || '',
-    role: r.chu_quan_emp_no === empNo
-      ? 'chu_quan'
-      : r.pho_quan_1_emp_no === empNo
-        ? 'pho_quan_1'
-        : 'pho_quan_2',
-  }));
+  return rows.map((r) => ({ lCode: r.l_code, name: r.base_name || r.l_code }));
 }
 
 module.exports = {
-  getMemberXuongNos,
-  isMemberOfXuong,
-  getXuong,
-  getXuongHeadMap,
-  listAllXuong,
+  getMemberLCodes,
+  isMemberOfLCode,
+  lCodeExists,
+  getGroupMembersMap,
+  getGroupMembers,
+  getFirstApproverMap,
+  listLCodeOptions,
   getMyWorkshops,
 };

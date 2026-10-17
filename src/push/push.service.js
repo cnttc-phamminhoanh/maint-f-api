@@ -1,5 +1,6 @@
-const { query, queryOne, inClause } = require('../db');
+const { query, inClause } = require('../db');
 const { ApiError } = require('../errors');
+const workshopService = require('../services/workshop.service');
 const { toIso } = require('../utils/dates');
 const fcm = require('./fcm');
 
@@ -164,33 +165,21 @@ function buildBody(type, actorName, equName, equNo) {
 }
 
 // Nhom duyet cua thiet bi -> Map(empNo -> url nhan thong bao).
-// Luu y: eqm_mnt.approver (cot approver_emp_no doi ten 2026-10-17) tu 2026-10-09 la MA PHAN XUONG (xuong_mnt.xuong_no),
-// nen phia approver lay chu quan + 2 pho quan cua phan xuong do; truoc day la MNV.
+// 2026-10-17: approver = l_code; nhom duyet = moi thanh vien eqm_bas_user co l_code do
+// (chi chua approver / chu quan / van thu). Chu quan / van thu nhan link /dept-approval,
+// approver nhan trang chu. Khong gui them cho chu quan/van thu bo phan ngoai nhom.
 async function collectRecipients(deviceRow, actorEmpNo, type) {
   const recipients = new Map();
   const add = (empNo, url) => {
     if (empNo && empNo !== actorEmpNo && !recipients.has(empNo)) recipients.set(empNo, url);
   };
   if (deviceRow.approver_emp_no) {
-    const x = await queryOne(
-      `SELECT chu_quan_emp_no, pho_quan_1_emp_no, pho_quan_2_emp_no
-       FROM xuong_mnt WHERE xuong_no = @x`,
-      { x: deviceRow.approver_emp_no },
-    );
-    if (x) {
-      add(x.chu_quan_emp_no, '/');
-      add(x.pho_quan_1_emp_no, '/');
-      add(x.pho_quan_2_emp_no, '/');
-    }
-  }
-  if (deviceRow.mnt_dept_no) {
-    const d = await queryOne(
-      'SELECT chu_quan_emp_no, van_thu_emp_no FROM dept_mnt WHERE mnt_dept_no = @d',
-      { d: deviceRow.mnt_dept_no },
-    );
-    if (d) {
-      add(d.chu_quan_emp_no, '/dept-approval');
-      add(d.van_thu_emp_no, '/dept-approval');
+    const members = await workshopService.getGroupMembers(deviceRow.approver_emp_no);
+    for (const m of members) {
+      const url = m.position === 'chu_quan' || m.position === 'van_thu'
+        ? '/dept-approval'
+        : '/';
+      add(m.empNo, url);
     }
   }
   // approved / rejected: bao them nguoi da gui don (temp ?? maintainer)
