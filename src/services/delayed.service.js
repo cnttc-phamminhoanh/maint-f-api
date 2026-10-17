@@ -62,11 +62,11 @@ async function computeCurrentDelayed() {
   const rows = await query(
     `SELECT equ_no, equ_name, use_date, max_mt_date, maintenance_type,
             maintenance_status, maintainer_emp_no, temp_maintainer_emp_no,
-            temp_maintainer_date, approver_emp_no, mnt_dept_no,
+            temp_maintainer_date, approver AS approver_emp_no, mnt_dept_no,
             completion_requested_at
      FROM eqm_mnt`,
   );
-  // 2026-10-09: approver_emp_no = ma phan xuong; chiu trach nhiem cho duyet =
+  // 2026-10-09: approver (cot approver_emp_no cu, doi ten 2026-10-17) = ma phan xuong; chiu trach nhiem cho duyet =
   // chu quan xuong. Chua co du lieu xuong_mnt thi fallback ve ma cu (MNV)
   const xuongCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const xuongMap = await workshopService.getXuongHeadMap(xuongCodes);

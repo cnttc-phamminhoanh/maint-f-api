@@ -164,7 +164,7 @@ function buildBody(type, actorName, equName, equNo) {
 }
 
 // Nhom duyet cua thiet bi -> Map(empNo -> url nhan thong bao).
-// Luu y: eqm_mnt.approver_emp_no tu 2026-10-09 la MA PHAN XUONG (xuong_mnt.xuong_no),
+// Luu y: eqm_mnt.approver (cot approver_emp_no doi ten 2026-10-17) tu 2026-10-09 la MA PHAN XUONG (xuong_mnt.xuong_no),
 // nen phia approver lay chu quan + 2 pho quan cua phan xuong do; truoc day la MNV.
 async function collectRecipients(deviceRow, actorEmpNo, type) {
   const recipients = new Map();

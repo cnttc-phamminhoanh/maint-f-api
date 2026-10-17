@@ -13,7 +13,7 @@ function buildSpec(baseUrl) {
         'API bao tri thiet bi chay local, noi voi SQL Server cua ung dung. ' +
         'Mo phong dung hop dong voi backend NestJS cloud.\n\n' +
         '**Danh tinh**: moi request co token deu bi chot theo phien — truyen MNV/id cua nguoi khac bi tu choi (403 TOKEN_USER_MISMATCH).\n' +
-        '**Luong duyet**: `approver_emp_no` tren thiet bi la MA PHAN XUONG; nhom duyet = chu quan + pho quan 1/2 trong `xuong_mnt` + chu quan/van thu bo phan thiet bi.',
+        '**Luong duyet**: `approver` (cot approver_emp_no cu) tren thiet bi la MA PHAN XUONG; nhom duyet = chu quan + pho quan 1/2 trong `xuong_mnt` + chu quan/van thu bo phan thiet bi.',
     },
     servers: [{ url: baseUrl }],
     tags: [
@@ -648,7 +648,7 @@ function buildSpec(baseUrl) {
           tags: ['devices'],
           summary: 'Chuyen phan xuong',
           description:
-            'Can token. Doi approver_emp_no sang ma phan xuong moi. ' +
+            'Can token. Doi approver sang ma phan xuong moi. ' +
             'Neu truyen newMaintainerId: gan lai nguoi phu trach, xoa tiep quan tam thoi va chuyen bo phan theo nguoi phu trach moi. ' +
             'Quyen: admin duoc chuyen tat ca; nhan vien/chu quan/van thu chi duoc chuyen thiet bi trong bo phan minh.',
           security: [{ bearerAuth: [] }],

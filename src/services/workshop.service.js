@@ -2,7 +2,7 @@ const { query, queryOne } = require('../db');
 
 // Phan xuong (xuong_mnt): moi xuong co toi da 3 thanh vien
 // (chu quan xuong + pho chu quan 1 + pho chu quan 2).
-// eqm_mnt.approver_emp_no chua ma phan xuong; xet duyet gui cho
+// eqm_mnt.approver (cot approver_emp_no doi ten 2026-10-17) chua ma phan xuong; xet duyet gui cho
 // tat ca thanh vien cua phan xuong do (2026-10-09).
 
 async function getMemberXuongNos(empNo) {

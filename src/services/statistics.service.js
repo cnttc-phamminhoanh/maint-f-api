@@ -228,7 +228,7 @@ async function getEquipmentStatistics(params) {
     values.empNo = params.empNo;
   }
   if (params.respEmpNo) {
-    conditions.push('approver_emp_no = @respEmpNo');
+    conditions.push('approver = @respEmpNo');
     values.respEmpNo = params.respEmpNo;
   }
   if (params.maintType) {
@@ -341,7 +341,7 @@ async function getEquipmentStatistics(params) {
   values.pageSize = params.pageSize;
   const rows = await query(
     `SELECT id, equ_no, equ_name, equ_type, equ_type_desc, location,
-      maintainer_emp_no, approver_emp_no, temp_maintainer_emp_no,
+      maintainer_emp_no, approver AS approver_emp_no, temp_maintainer_emp_no,
       maintenance_type, maintenance_status, use_date, max_mt_date, mnt_dept_no
      FROM eqm_mnt ${finalWhere}
      ORDER BY mnt_dept_no DESC, equ_type ASC, equ_no ASC
@@ -427,8 +427,8 @@ async function listCompletedToday(factory, page, pageSize) {
   const where = ['m.sheet_date >= @s AND m.sheet_date < @e'];
   const values = { s: dayStart, e: dayEnd };
   if (factory) {
-    // 2026-10-17: equ_addr da bi xoa; ma xuong = approver_emp_no
-    where.push('d.approver_emp_no = @factory');
+    // 2026-10-17: equ_addr da bi xoa; ma xuong = approver (cot approver_emp_no cu)
+    where.push('d.approver = @factory');
     values.factory = factory;
   }
   const whereSql = `WHERE ${where.join(' AND ')}`;
@@ -443,7 +443,7 @@ async function listCompletedToday(factory, page, pageSize) {
   const rows = await query(
     `SELECT m.sheet_no, m.sheet_date, m.equ_no, m.emp_no, m.mt_flag,
             d.equ_name, d.location, bc.base_name AS location_name, d.equ_type, d.equ_type_desc,
-            d.maintainer_emp_no, d.approver_emp_no, d.temp_maintainer_emp_no,
+            d.maintainer_emp_no, d.approver AS approver_emp_no, d.temp_maintainer_emp_no,
             d.maintenance_type, d.max_mt_date, d.use_date
        FROM eqm_mt1 m
        LEFT JOIN eqm_mnt d ON d.equ_no = m.equ_no
