@@ -959,9 +959,9 @@ async function transferFactory(id, body, userId) {
     maintainerTarget = { empNo: target.emp_no, departmentId: target.mnt_dept_no || null };
   }
 
-  // 2026-10-17: equ_addr da bi user xoa; chi can cap nhat ma xuong = approver
-  const set = ['approver = @approver'];
-  const values = { approver: body.targetFactory, id };
+  // 2026-10-17: equ_addr da bi user xoa; ma xuong ghi vao approver + location
+  const set = ['approver = @factory', 'location = @factory'];
+  const values = { factory: body.targetFactory, id, equNo: row.equ_no };
   if (maintainerTarget) {
     set.push(
       'maintainer_emp_no = @newMaintainer',
@@ -972,11 +972,30 @@ async function transferFactory(id, body, userId) {
     values.newMaintainer = maintainerTarget.empNo;
     values.newDept = maintainerTarget.departmentId;
   }
-  const updated = await query(
-    `UPDATE eqm_mnt SET ${set.join(', ')}${touchSuffix()} OUTPUT inserted.id WHERE id = @id`,
-    values,
-  );
-  if (updated.length === 0) throw new ApiError(404, 'Device not found');
+  // eqm_bas: chi dung 2 cot def04 (= location) va emp_no (= nguoi phu trach)
+  const basEmpNo = maintainerTarget
+    ? maintainerTarget.empNo
+    : row.maintainer_emp_no;
+  const basSet = ['def04 = @factory'];
+  if (basEmpNo) basSet.push('emp_no = @basEmp');
+  values.basEmp = basEmpNo;
+
+  await withTransaction(async (tx) => {
+    const updated = await txQuery(
+      tx,
+      `UPDATE eqm_mnt SET ${set.join(', ')}${touchSuffix()} OUTPUT inserted.id WHERE id = @id`,
+      values,
+    );
+    if (updated.length === 0) throw new ApiError(404, 'Device not found');
+    const basUpdated = await txQuery(
+      tx,
+      `UPDATE eqm_bas SET ${basSet.join(', ')} OUTPUT inserted.eqm_no WHERE eqm_no = @equNo`,
+      values,
+    );
+    if (basUpdated.length === 0) {
+      throw new ApiError(409, 'Device not found in eqm_bas');
+    }
+  });
   const device = await getDeviceById(id);
   return { success: true, device };
 }
