@@ -32,8 +32,10 @@ async function lCodeExists(lCode) {
   return Boolean(row);
 }
 
-// Map l_code -> [{empNo, empName, position}] theo emp_no ASC
+// Map l_code -> [{empNo, empName, position}] theo emp_no SO tang dan
 // (phan tu dau = approver dau tien = Nguoi quan ly thiet bi)
+// emp_no la varchar: sort chuoi se nho ('12442' < '5454') -> phai TRY_CAST sang INT
+// (2026-10-19 user hoi vi sao manager LE05 la 12442 du 5454 nho hon)
 async function getGroupMembersMap(lCodes) {
   const map = new Map();
   if (!lCodes || lCodes.length === 0) return map;
@@ -47,8 +49,11 @@ async function getGroupMembersMap(lCodes) {
             ISNULL(e.position, '') AS position
        FROM eqm_bas_user u
        LEFT JOIN emp_mnt e ON e.emp_no = u.emp_no
-      WHERE u.l_code IN (${placeholders.join(',')})
-      ORDER BY u.l_code ASC, u.emp_no ASC`,
+        WHERE u.l_code IN (${placeholders.join(',')})
+        ORDER BY u.l_code ASC,
+                 CASE WHEN u.emp_no LIKE '%[^0-9]%' THEN 1 ELSE 0 END ASC,
+                 TRY_CAST(u.emp_no AS INT) ASC,
+                 u.emp_no ASC`,
     params,
   );
   for (const r of rows) {
