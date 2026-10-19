@@ -987,13 +987,17 @@ async function transferFactory(id, body, userId) {
       values,
     );
     if (updated.length === 0) throw new ApiError(404, 'Device not found');
+    // eqm_bas la bang ERP co the gan trigger: OUTPUT khong INTO se bao loi 334
     const basUpdated = await txQuery(
       tx,
-      `UPDATE eqm_bas SET ${basSet.join(', ')} OUTPUT inserted.equ_no WHERE equ_no = @equNo`,
+      `UPDATE eqm_bas SET ${basSet.join(', ')} WHERE equ_no = @equNo; SELECT @@ROWCOUNT AS cnt;`,
       values,
     );
-    if (basUpdated.length === 0) {
-      throw new ApiError(409, 'Device not found in eqm_bas');
+    if ((basUpdated[0]?.cnt ?? 0) === 0) {
+      throw new ApiError(
+        409,
+        `Device not found in eqm_bas (equ_no=${row.equ_no})`,
+      );
     }
   });
   const device = await getDeviceById(id);
