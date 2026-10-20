@@ -37,10 +37,26 @@ router.post(
       empName: Joi.string().max(200).optional().allow(''),
       // Mat khau mo dang ky bat buoc phai gui len — server kiem tra, khong chi la gate UI
       accessPassword: Joi.string().min(1).max(200).required(),
+      // 2026-10-20: position bat buoc; mntDeptNo/location tuy position, server validate
+      position: Joi.string().min(1).max(50).required(),
+      mntDeptNo: Joi.string().max(50).optional().allow('', null),
+      location: Joi.string().max(50).optional().allow('', null),
     }),
   ),
   asyncHandler(async (req, res) => {
-    res.json(await authService.registerUser(req.body.empNo, req.body.empName || '', req.body.accessPassword));
+    res.json(await authService.registerUser(req.body.empNo, req.body.empName || '', req.body.accessPassword, {
+      position: req.body.position,
+      mntDeptNo: req.body.mntDeptNo || null,
+      location: req.body.location || null,
+    }));
+  }),
+);
+
+// Dropdown cua form đăng ký: position hop le + phong ban + vi tri (code_type 176)
+router.get(
+  '/register-options',
+  asyncHandler(async (req, res) => {
+    res.json(await authService.getRegisterOptions());
   }),
 );
 
