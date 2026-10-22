@@ -540,6 +540,8 @@ async function adminSync(userId) {
 
 // Lich su tre han (public, trang BI): toan bo episode ke ca da giai quyet
 // days_overdue & ten thiet bi tinh/lay tu eqm_mnt luc doc, ko can sync
+// 2026-10-22 user chot: sap theo thu tu INSERT (TRY_CAST(id AS BIGINT) desc) de me
+// episode job vua ghi len dau ngay; dong update tai cho / da dong giu nguyen vi tri
 async function getDelayHistory(dept, page, pageSize) {
   await holidayService.ensureHolidaysLoaded();
   const where = [SUSPENDED_EPISODE_SQL];
@@ -565,7 +567,7 @@ async function getDelayHistory(dept, page, pageSize) {
      FROM eqm_mnt_delay d
      LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
      ${whereSql}
-     ORDER BY d.occurred_at DESC, d.id DESC
+     ORDER BY TRY_CAST(d.id AS BIGINT) DESC
      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
     params,
   );
