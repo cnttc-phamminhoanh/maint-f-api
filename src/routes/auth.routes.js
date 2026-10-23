@@ -41,6 +41,8 @@ router.post(
       position: Joi.string().min(1).max(50).required(),
       mntDeptNo: Joi.string().max(50).optional().allow('', null),
       location: Joi.string().max(50).optional().allow('', null),
+      // 2026-10-23: approver chon nhieu phan xuong
+      locations: Joi.array().items(Joi.string().min(1).max(50)).max(50).optional(),
     }),
   ),
   asyncHandler(async (req, res) => {
@@ -48,6 +50,7 @@ router.post(
       position: req.body.position,
       mntDeptNo: req.body.mntDeptNo || null,
       location: req.body.location || null,
+      locations: req.body.locations || null,
     }));
   }),
 );

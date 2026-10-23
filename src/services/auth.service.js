@@ -132,20 +132,39 @@ async function registerUser(empNo, empName, accessPassword, details) {
     );
     if (!dept) throw new ApiError(400, 'Department not found');
   }
-  let location = null;
+  // 2026-10-23: approver duoc chon nhieu phan xuong (mang locations),
+  // tuong thich nguoc truong location don cua ban FE cu
+  let locations = [];
   if (position === 'approver') {
-    location = String(extra.location || '').trim() || null;
-    if (!location) throw new ApiError(400, 'Location required for approver');
-    const loc = await queryOne(
-      `SELECT TOP 1 base_code FROM bas_base_code
-        WHERE base_code = @l AND code_type = '176'`,
-      { l: location },
+    if (Array.isArray(extra.locations)) {
+      locations = extra.locations
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+    } else if (extra.location) {
+      const single = String(extra.location).trim();
+      if (single) locations = [single];
+    }
+    locations = [...new Set(locations)];
+    if (locations.length === 0) {
+      throw new ApiError(400, 'Location required for approver');
+    }
+    const locParams = {};
+    const locSql = locations.map((code, idx) => {
+      locParams['l' + idx] = code;
+      return '@l' + idx;
+    });
+    const locRows = await query(
+      `SELECT base_code FROM bas_base_code
+        WHERE code_type = '176' AND base_code IN (${locSql.join(', ')})`,
+      locParams,
     );
-    if (!loc) throw new ApiError(400, 'Location not found');
+    if (locRows.length !== locations.length) {
+      throw new ApiError(400, 'Location not found');
+    }
   }
   const existing = await queryOne('SELECT id FROM emp_mnt WHERE emp_no = @e', { e: empNo });
   if (existing) throw new ApiError(409, 'MNV da ton tai');
-  const values = { e: empNo, n: empName || empNo, p: position, d: deptNo, l: location };
+  const values = { e: empNo, n: empName || empNo, p: position, d: deptNo };
   let created;
   try {
     await withTransaction(async (tx) => {
@@ -157,19 +176,21 @@ async function registerUser(empNo, empName, accessPassword, details) {
         values,
       );
       created = rows[0];
-      if (position === 'approver' && location) {
-        const dup = await txQuery(
-          tx,
-          'SELECT TOP 1 l_code FROM eqm_bas_user WHERE l_code = @l AND emp_no = @e',
-          values,
-        );
-        if (dup.length === 0) {
-          await txQuery(
+      if (position === 'approver') {
+        for (const code of locations) {
+          const dup = await txQuery(
             tx,
-            `INSERT INTO eqm_bas_user (l_code, emp_no, emp_name, wc_name, wc_id)
-             VALUES (@l, @e, @n, NULL, NULL)`,
-            values,
+            'SELECT TOP 1 l_code FROM eqm_bas_user WHERE l_code = @l AND emp_no = @e',
+            { l: code, e: empNo },
           );
+          if (dup.length === 0) {
+            await txQuery(
+              tx,
+              `INSERT INTO eqm_bas_user (l_code, emp_no, emp_name, wc_name, wc_id)
+               VALUES (@l, @e, @n, NULL, NULL)`,
+              { l: code, e: empNo, n: empName || empNo },
+            );
+          }
         }
       }
     });
