@@ -1,5 +1,6 @@
 const { query, withTransaction, txQuery, inClause, inClauseSafe } = require('../db');
 const holidayService = require('./holiday.service');
+const dueSchedule = require('./due-schedule.service');
 const workshopService = require('./workshop.service');
 const { assertAdmin, getCaller } = require('../utils/auth');
 const {
@@ -71,13 +72,11 @@ async function computeCurrentDelayed() {
   const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const today = businessToday();
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
   const current = new Map();
   for (const row of rows) {
-    const due = holidayService.getAdjustedDueDay({
-      lastMaintenanceDate: row.max_mt_date,
-      startDate: row.use_date,
-      maintenanceCycle: row.maintenance_type,
-    });
+    const due = dueMap.get(row.equ_no) || null;
     if (!due || daysBetween(today, due) >= 0) continue;
     const status = row.maintenance_status || 'not_due';
     const pending = status === 'pending_approval';
@@ -433,6 +432,8 @@ async function queryList(reason, page, pageSize) {
   const deptHistoryCounts = await buildDeptHistory();
 
   const today = businessToday();
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
   const offset = (page - 1) * pageSize;
   const rows = await query(
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
@@ -479,13 +480,7 @@ async function queryList(reason, page, pageSize) {
 
   const items = rows.map((r) => {
     const storedDue = fmtDate(r.next_due_date);
-    const liveDue = r.resolved_at
-      ? null
-      : holidayService.getAdjustedDueDay({
-        lastMaintenanceDate: r.max_mt_date,
-        startDate: r.use_date,
-        maintenanceCycle: r.e_maintenance_type || r.maintenance_type,
-      });
+    const liveDue = r.resolved_at ? null : (dueMap.get(r.equ_no) || null);
     const nextDue = liveDue || storedDue;
     const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
     const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;
@@ -573,6 +568,8 @@ async function getDelayHistory(dept, page, pageSize) {
   );
 
   const today = businessToday();
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
   const empNos = new Set();
   const deptNos = new Set();
   for (const r of rows) {
@@ -586,13 +583,7 @@ async function getDelayHistory(dept, page, pageSize) {
 
   const items = rows.map((r) => {
     const storedDue = fmtDate(r.next_due_date);
-    const liveDue = r.resolved_at
-      ? null
-      : holidayService.getAdjustedDueDay({
-        lastMaintenanceDate: r.max_mt_date,
-        startDate: r.use_date,
-        maintenanceCycle: r.e_maintenance_type || r.maintenance_type,
-      });
+    const liveDue = r.resolved_at ? null : (dueMap.get(r.equ_no) || null);
     const nextDue = liveDue || storedDue;
     const endDate = r.resolved_at ? fmtDate(r.resolved_at) : today;
     const overdue = nextDue ? Math.max(0, daysBetween(nextDue, endDate)) : 0;

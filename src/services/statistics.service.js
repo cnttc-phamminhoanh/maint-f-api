@@ -16,7 +16,7 @@ const {
   fmtDate,
   CYCLE_MONTHS,
 } = require('../utils/dates');
-const holidayService = require('./holiday.service');
+const dueSchedule = require('./due-schedule.service');
 
 const ALL_STATUSES = [
   'needs_maintenance',
@@ -41,10 +41,11 @@ const CYCLE_LABEL_MAP = {
 };
 
 async function getOverview() {
-  await holidayService.ensureHolidaysLoaded();
   const today = businessToday();
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
   const rows = await query(
-    'SELECT use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no FROM eqm_mnt',
+    'SELECT equ_no, use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no FROM eqm_mnt',
   );
 
   const statusMap = new Map();
@@ -61,7 +62,7 @@ async function getOverview() {
       maintenanceCycle: row.maintenance_type,
       maintenanceStatus: row.maintenance_status,
     };
-    const nextDue = holidayService.getAdjustedDueDay(device);
+    const nextDue = dueMap.get(row.equ_no) || null;
     const displayStatus = effectiveStatus(device, today, nextDue);
     statusMap.set(displayStatus, (statusMap.get(displayStatus) || 0) + 1);
 
@@ -216,8 +217,9 @@ async function getDelayedStatistics(reason, page, pageSize) {
 }
 
 async function getEquipmentStatistics(params) {
-  await holidayService.ensureHolidaysLoaded();
   const today = businessToday();
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
   const conditions = [];
   const values = {};
   if (params.factory) {
@@ -272,17 +274,13 @@ async function getEquipmentStatistics(params) {
   let statusFilteredIds = null;
   if (DUE_FILTERS.includes(params.due) || useEffectiveStatus) {
     const baseRows = await query(
-      `SELECT id, use_date, max_mt_date, maintenance_type, maintenance_status FROM eqm_mnt ${whereSql}`,
+      `SELECT id, equ_no, use_date, max_mt_date, maintenance_type, maintenance_status FROM eqm_mnt ${whereSql}`,
       values,
     );
     const dueMatched = [];
     const statusMatched = [];
     for (const row of baseRows) {
-      const nextDue = holidayService.getAdjustedDueDay({
-        startDate: row.use_date,
-        lastMaintenanceDate: row.max_mt_date,
-        maintenanceCycle: row.maintenance_type,
-      });
+      const nextDue = dueMap.get(row.equ_no) || null;
       if (DUE_FILTERS.includes(params.due)) {
         const diffDays = daysBetween(today, nextDue);
         const category =
@@ -369,13 +367,14 @@ async function getEquipmentStatistics(params) {
   }
 
   const items = rows.map((row) => {
+    // eslint-disable-next-line no-unused-vars
     const device = {
       startDate: row.use_date,
       lastMaintenanceDate: row.max_mt_date,
       maintenanceCycle: row.maintenance_type,
       maintenanceStatus: row.maintenance_status,
     };
-    const nextDue = holidayService.getAdjustedDueDay(device);
+    const nextDue = dueMap.get(row.equ_no) || null;
     const daysOverdue = Math.max(0, -daysBetween(today, nextDue));
     const resp = row.approver_emp_no
       ? firstApproverMap.get(row.approver_emp_no) || null

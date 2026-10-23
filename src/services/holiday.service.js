@@ -16,6 +16,8 @@ let holidaySet = new Set();
 let loadedAt = 0;
 let loadingPromise = null;
 let sqlShiftEnabled = false;
+// 2026-10-23: tăng mỗi lần nạp lại hr_holiday để lịch trượt chuyền biết cache đã cũ
+let calendarVersion = 0;
 
 // 1900-01-01 là thứ Hai; khớp DATEDIFF(DAY,0,d) % 7 = 6 bên SQL.
 function isSunday(dateStr) {
@@ -38,6 +40,14 @@ function shiftPastHolidays(dateStr) {
 
 function getAdjustedDueDay(device) {
   return shiftPastHolidays(getNextDueDay(device));
+}
+
+function isHoliday(dateStr) {
+  return holidaySet.has(dateStr);
+}
+
+function getCalendarVersion() {
+  return calendarVersion;
 }
 
 async function detectHolidaySupport() {
@@ -63,6 +73,7 @@ async function loadHolidays() {
   const rows = await query('SELECT holiday_date FROM hr_holiday');
   // fmtDate: lay ngay theo gio HK, khong dung toISOString (UTC lui 1 ngay)
   holidaySet = new Set(rows.map((r) => fmtDate(r.holiday_date)));
+  calendarVersion += 1;
 }
 
 // Load cache ngày nghỉ; lỗi (chưa tạo bảng) thì dùng Set rỗng, tự thử lại sau.
@@ -156,6 +167,8 @@ module.exports = {
   holidaySqlEnabled,
   ensureHolidaysLoaded,
   isSunday,
+  isHoliday,
+  getCalendarVersion,
   shiftPastHolidays,
   getAdjustedDueDay,
   listHolidays,

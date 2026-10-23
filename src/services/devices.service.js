@@ -13,31 +13,19 @@ const {
   fmtDate,
   toIso,
   addDays,
-  getNextDueDay,
   effectiveStatus,
   isTempActive,
   effectiveMaintainerEmpNo,
 } = require('../utils/dates');
 const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order.service');
-const holidayService = require('./holiday.service');
+const dueSchedule = require('./due-schedule.service');
 const pushService = require('../push/push.service');
 
-// bieu thuc SQL tinh ngay den han (DATEADD tu clamp ngay cuoi thang - FIX #1).
-// 2026-10-07: boc them fn_shift_due de doi ngay han qua ngay nghi (chu nhat + hr_holiday)
-// khi function da duoc tao (sql/003_hr_holiday.sql).
-const NEXT_DUE_BASE_SQL = `CAST(CASE
-  WHEN d.maintenance_type = '1_week' THEN DATEADD(day, 7, ISNULL(d.max_mt_date, d.use_date))
-  WHEN d.maintenance_type IN ('2_weeks','2_week') THEN DATEADD(day, 14, ISNULL(d.max_mt_date, d.use_date))
-  WHEN d.maintenance_type = '1_month' THEN DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
-  WHEN d.maintenance_type = '1_year' THEN DATEADD(year, 1, ISNULL(d.max_mt_date, d.use_date))
-  ELSE DATEADD(month, 1, ISNULL(d.max_mt_date, d.use_date))
-END AS date)`;
-
-function nextDueSql() {
-  return holidayService.holidaySqlEnabled()
-    ? `dbo.fn_shift_due(${NEXT_DUE_BASE_SQL})`
-    : NEXT_DUE_BASE_SQL;
-}
+// 2026-10-23: ngay han = ngay goc (max_mt_date ?? use_date) + chu ky, roi vao ngay nghi
+// (Chu nhat + hr_holiday) thi TRUOT CHUYEN DAY CHUYEN (due-schedule.service): me roi ngay
+// nghi day sang ngay ke; ngay nhan da co me rieng thi me do lai day tiep; moi ngay chi nhan
+// mot me som nhat; chuoi dung o ngay trong dau tien. => khong con tinh per-row trong SQL;
+// trang thai / loc / dem / sap xep lam trong JS tren han truot chuyen.
 
 const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
   d.maintenance_type, d.maintenance_status, d.completion_requested_at, d.rejection_reason,
@@ -49,6 +37,11 @@ const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
 // theo cot eqm_mnt.location (cot equ_addr da bi user xoa, join bas_dept bo)
 const DEVICE_FROM = `FROM eqm_mnt d
   LEFT JOIN dbo.bas_base_code bc ON bc.base_code = d.location AND bc.code_type = '176'`;
+
+// Truy van danh sach can _updated_at de sap xep nhom in_maintenance trong JS
+function deviceSelectSql() {
+  return config.updatedAtCol ? `${DEVICE_SELECT}, d.${config.updatedAtCol}` : DEVICE_SELECT;
+}
 
 const EMPTY_COUNTS = {
   dueCounts: { all: 0, overdue: 0, today: 0, tomorrow: 0, later: 0 },
@@ -74,23 +67,70 @@ function touchSuffix() {
   return config.updatedAtCol ? `, ${config.updatedAtCol} = GETDATE()` : '';
 }
 
-function orderByDeviceList(_today) {
-  const parts = [
-    `CASE
-      WHEN d.maintenance_status = 'in_maintenance' THEN 1
-      WHEN d.maintenance_status = 'pending_approval' THEN 2
-      WHEN d.maintenance_status = 'rejected' THEN 3
-      WHEN ${nextDueSql()} <= @today THEN 4
-      ELSE 5
-    END ASC`,
-  ];
-  if (config.updatedAtCol) {
-    parts.push(
-      `CASE WHEN d.maintenance_status = 'in_maintenance' THEN d.${config.updatedAtCol} END DESC`,
+// ==== Han truot chuyen (2026-10-23) ====
+// Han sau truot cua tung thiet bi tra tu lich toan cuc (due-schedule.service);
+// loc trang thai / chu ky / thoi han, dem va sap xep lam trong JS.
+function decorateRows(rows, dueMap, today) {
+  return rows.map((row) => {
+    const due = dueMap.get(row.equ_no) || null;
+    const status = effectiveStatus(
+      {
+        maintenanceStatus: row.maintenance_status,
+        startDate: row.use_date,
+        lastMaintenanceDate: row.max_mt_date,
+        maintenanceCycle: row.maintenance_type,
+      },
+      today,
+      due,
     );
+    return { row, due, status };
+  });
+}
+
+function passStatusFilter(ctx, statusFilter) {
+  return !statusFilter || ctx.status === statusFilter;
+}
+
+function passCycleFilter(row, cycleFilter) {
+  if (!cycleFilter) return true;
+  if (cycleFilter === '2_weeks') {
+    return row.maintenance_type === '2_weeks' || row.maintenance_type === '2_week';
   }
-  parts.push(`${nextDueSql()} ASC`, 'd.equ_no ASC');
-  return parts.join(', ');
+  return row.maintenance_type === cycleFilter;
+}
+
+function passDueFilter(ctx, dueFilter, today, tomorrow) {
+  if (!dueFilter || dueFilter === 'all') return true;
+  if (!ctx.due) return false;
+  // pending khong hien o tab Tre han ben bao tri (BI/admin van dem khi qua an han)
+  if (dueFilter === 'overdue') return ctx.due < today && ctx.status !== 'pending_approval';
+  if (dueFilter === 'today') return ctx.due === today;
+  if (dueFilter === 'tomorrow') return ctx.due === tomorrow;
+  return ctx.due > tomorrow; // later
+}
+
+function statusPriority(ctx, today) {
+  if (ctx.status === 'in_maintenance') return 1;
+  if (ctx.status === 'pending_approval') return 2;
+  if (ctx.status === 'rejected') return 3;
+  if (ctx.due && ctx.due <= today) return 4;
+  return 5;
+}
+
+function compareDeviceOrder(a, b, today) {
+  const pa = statusPriority(a, today);
+  const pb = statusPriority(b, today);
+  if (pa !== pb) return pa - pb;
+  if (pa === 1 && config.updatedAtCol) {
+    const ta = a.row[config.updatedAtCol] ? new Date(a.row[config.updatedAtCol]).getTime() : 0;
+    const tb = b.row[config.updatedAtCol] ? new Date(b.row[config.updatedAtCol]).getTime() : 0;
+    if (ta !== tb) return tb - ta; // vua quet len dau
+  }
+  const da = a.due || '9999-12-31';
+  const db = b.due || '9999-12-31';
+  if (da !== db) return da < db ? -1 : 1;
+  if (a.row.equ_no !== b.row.equ_no) return a.row.equ_no < b.row.equ_no ? -1 : 1;
+  return 0;
 }
 
 async function getEmpNameMap(empNos) {
@@ -106,7 +146,7 @@ async function getEmpNameMap(empNos) {
   return map;
 }
 
-function toDeviceRecord(row, empNameMap, today, firstApproverMap, factoryNameMap) {
+function toDeviceRecord(row, empNameMap, today, firstApproverMap, factoryNameMap, dueMap) {
   const effectiveId = effectiveMaintainerEmpNo(row, today);
   const maintainerId = row.maintainer_emp_no || '';
   // 2026-10-17: approver = l_code (eqm_bas_user); Nguoi quan ly = approver dau tien
@@ -116,13 +156,8 @@ function toDeviceRecord(row, empNameMap, today, firstApproverMap, factoryNameMap
     ? firstApproverMap.get(managerCode)
     : undefined;
   const managerId = firstApprover ? (firstApprover.empNo || '') : '';
-  const adjustedDue = holidayService.shiftPastHolidays(
-    getNextDueDay({
-      startDate: row.use_date,
-      lastMaintenanceDate: row.max_mt_date,
-      maintenanceCycle: row.maintenance_type,
-    }),
-  );
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  const adjustedDue = dueMap.get(row.equ_no) || null;
   const status = effectiveStatus(
     {
       maintenanceStatus: row.maintenance_status,
@@ -168,6 +203,8 @@ function toDeviceRecord(row, empNameMap, today, firstApproverMap, factoryNameMap
     locationName: row.location_name || '',
     equType: row.equ_type || '',
     equTypeDesc: row.equ_type_desc || '',
+    // 2026-10-23: han truot chuyen (FE dung gia tri nay, khong tu tinh dia phuong)
+    nextDueDate: adjustedDue || '',
   };
 }
 
@@ -185,8 +222,7 @@ async function getFactoryNameMap(lCodes) {
   return map;
 }
 
-async function enrichRecords(rows, today) {
-  await holidayService.ensureHolidaysLoaded();
+async function enrichRecords(rows, today, dueMap) {
   // 2026-10-17: approver = l_code (eqm_bas_user); Nguoi quan ly = approver dau tien cua nhom
   const lCodes = [...new Set(rows.map((row) => row.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
@@ -201,7 +237,8 @@ async function enrichRecords(rows, today) {
     if (info.empNo) empNos.push(info.empNo);
   }
   const map = await getEmpNameMap(empNos);
-  return rows.map((row) => toDeviceRecord(row, map, today, firstApproverMap, factoryNameMap));
+  const effectiveDueMap = dueMap || (await dueSchedule.getEffectiveDueMap());
+  return rows.map((row) => toDeviceRecord(row, map, today, firstApproverMap, factoryNameMap, effectiveDueMap));
 }
 
 function assertCanMaintain(caller, row, today) {
@@ -330,42 +367,15 @@ async function buildFilterConditions(params, caller, values) {
 
   const joinSql = needJoin ? 'LEFT JOIN emp_mnt m2 ON m2.emp_no = d.maintainer_emp_no' : '';
 
-  // them loc status / cycle / due
-  const finalCond = [...cond];
-  if (params.status) {
-    // 2026-10-10: status filter phai dung chuan effectiveStatus giong card hien thi
-    if (params.status === 'needs_maintenance') {
-      finalCond.push(`d.maintenance_status IN ('needs_maintenance','not_due') AND ${nextDueSql()} <= @today`);
-    } else if (params.status === 'not_due') {
-      finalCond.push(`d.maintenance_status IN ('needs_maintenance','not_due') AND ${nextDueSql()} > @today`);
-    } else {
-      values.status = params.status;
-      finalCond.push('d.maintenance_status = @status');
-    }
-  }
-  if (params.cycle) {
-    values.cycle = params.cycle;
-    if (params.cycle === '2_weeks') {
-      finalCond.push('d.maintenance_type IN (\'2_weeks\',\'2_week\')');
-    } else {
-      finalCond.push('d.maintenance_type = @cycle');
-    }
-  }
-  if (params.due && params.due !== 'all') {
-    // pending khong hien o tab Tre han ben bao tri (BI/admin van dem khi qua an han)
-    if (params.due === 'overdue') finalCond.push(`${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval'`);
-    else if (params.due === 'today') finalCond.push(`${nextDueSql()} = @today`);
-    else if (params.due === 'tomorrow') finalCond.push(`${nextDueSql()} = @tomorrow`);
-    else if (params.due === 'later') finalCond.push(`${nextDueSql()} > @tomorrow`);
-  }
-
-  return { cond, finalCond, joinSql };
+  // 2026-10-23: loc status / cycle / due lam trong JS tren han truot chuyen
+  return { cond, joinSql };
 }
 
 async function listDevices(params) {
   const caller = await getCaller(params.userId);
   const today = businessToday();
-  const values = { today, tomorrow: addDays(today, 1) };
+  const tomorrow = addDays(today, 1);
+  const values = {};
 
   const built = await buildFilterConditions(params, caller, values);
   if (built === null) {
@@ -379,52 +389,49 @@ async function listDevices(params) {
       ...EMPTY_COUNTS,
     };
   }
-  const { cond, finalCond, joinSql } = built;
-  const baseWhere = cond.length > 0 ? `WHERE ${cond.join(' AND ')}` : '';
+  const where = built.cond.length > 0 ? `WHERE ${built.cond.join(' AND ')}` : '';
+  const rows = await query(
+    `SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${built.joinSql} ${where}`,
+    values,
+  );
+
+  // 2026-10-23: han truot chuyen tinh san toan cuc; loc / dem / sap xep lam trong JS
+  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const decorated = decorateRows(rows, dueMap, today);
 
   // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
-  const countRows = await query(
-    `SELECT COUNT(*) AS total,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} < @today AND d.maintenance_status <> 'pending_approval' THEN 1 ELSE 0 END), 0) AS overdue,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @today THEN 1 ELSE 0 END), 0) AS dueToday,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} = @tomorrow THEN 1 ELSE 0 END), 0) AS dueTomorrow,
-      ISNULL(SUM(CASE WHEN ${nextDueSql()} > @tomorrow THEN 1 ELSE 0 END), 0) AS dueLater,
-      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
-          AND ${nextDueSql()} <= @today THEN 1 ELSE 0 END), 0) AS stNeeds,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'in_maintenance' THEN 1 ELSE 0 END), 0) AS stInMaint,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'pending_approval' THEN 1 ELSE 0 END), 0) AS stPending,
-      ISNULL(SUM(CASE WHEN d.maintenance_status = 'rejected' THEN 1 ELSE 0 END), 0) AS stRejected,
-      ISNULL(SUM(CASE WHEN d.maintenance_status IN ('needs_maintenance','not_due')
-          AND ${nextDueSql()} > @today THEN 1 ELSE 0 END), 0) AS stNotDue,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_week' THEN 1 ELSE 0 END), 0) AS cy1w,
-      ISNULL(SUM(CASE WHEN d.maintenance_type IN ('2_weeks','2_week') THEN 1 ELSE 0 END), 0) AS cy2w,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_month' THEN 1 ELSE 0 END), 0) AS cy1m,
-      ISNULL(SUM(CASE WHEN d.maintenance_type = '1_year' THEN 1 ELSE 0 END), 0) AS cy1y
-    FROM eqm_mnt d ${joinSql} ${baseWhere}`,
-    values,
-  );
-  const c = countRows[0];
+  const dueCounts = { all: decorated.length, overdue: 0, today: 0, tomorrow: 0, later: 0 };
+  const statusCounts = {
+    all: decorated.length,
+    needs_maintenance: 0,
+    in_maintenance: 0,
+    pending_approval: 0,
+    rejected: 0,
+    not_due: 0,
+  };
+  const cycleCounts = { all: decorated.length, '1_week': 0, '2_weeks': 0, '1_month': 0, '1_year': 0 };
+  for (const ctx of decorated) {
+    if (ctx.due) {
+      if (ctx.due < today && ctx.status !== 'pending_approval') dueCounts.overdue += 1;
+      else if (ctx.due === today) dueCounts.today += 1;
+      else if (ctx.due === tomorrow) dueCounts.tomorrow += 1;
+      else if (ctx.due > tomorrow) dueCounts.later += 1;
+    }
+    if (statusCounts[ctx.status] !== undefined) statusCounts[ctx.status] += 1;
+    const cycle = ctx.row.maintenance_type === '2_week' ? '2_weeks' : ctx.row.maintenance_type;
+    if (cycleCounts[cycle] !== undefined) cycleCounts[cycle] += 1;
+  }
 
-  const finalWhere = finalCond.length > 0 ? `WHERE ${finalCond.join(' AND ')}` : '';
+  const filtered = decorated.filter((ctx) =>
+    passStatusFilter(ctx, params.status) &&
+    passCycleFilter(ctx.row, params.cycle) &&
+    passDueFilter(ctx, params.due, today, tomorrow));
+  filtered.sort((a, b) => compareDeviceOrder(a, b, today));
 
-  const totalRows = await query(
-    `SELECT COUNT(*) AS total FROM eqm_mnt d ${joinSql} ${finalWhere}`,
-    values,
-  );
-  const total = totalRows[0] ? totalRows[0].total : 0;
-
+  const total = filtered.length;
   const offset = (params.page - 1) * params.pageSize;
-  values.offset = offset;
-  values.pageSize = params.pageSize;
-  const rows = await query(
-    `SELECT ${DEVICE_SELECT}
-     ${DEVICE_FROM} ${joinSql} ${finalWhere}
-     ORDER BY ${orderByDeviceList(today)}
-     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
-    values,
-  );
-
-  const items = await enrichRecords(rows, today);
+  const pageRows = filtered.slice(offset, offset + params.pageSize).map((ctx) => ctx.row);
+  const items = await enrichRecords(pageRows, today, dueMap);
   return {
     items,
     position: caller.position,
@@ -432,34 +439,34 @@ async function listDevices(params) {
     total,
     page: params.page,
     pageSize: params.pageSize,
-    dueCounts: { all: c.total, overdue: c.overdue, today: c.dueToday, tomorrow: c.dueTomorrow, later: c.dueLater },
-    statusCounts: {
-      all: c.total,
-      needs_maintenance: c.stNeeds,
-      in_maintenance: c.stInMaint,
-      pending_approval: c.stPending,
-      rejected: c.stRejected,
-      not_due: c.stNotDue,
-    },
-    cycleCounts: { all: c.total, '1_week': c.cy1w, '2_weeks': c.cy2w, '1_month': c.cy1m, '1_year': c.cy1y },
+    dueCounts,
+    statusCounts,
+    cycleCounts,
   };
 }
 
 // 2026-10-14: endpoint nhe cho «Chon tat ca» cua FE — chi tra id theo dung
-// filter hien tai, khong dem so lieu, khong join ten, khong enrich tung dong
+// filter hien tai, khong enrich tung dong
 async function listDeviceIds(params) {
   const caller = await getCaller(params.userId);
   const today = businessToday();
-  const values = { today, tomorrow: addDays(today, 1) };
+  const tomorrow = addDays(today, 1);
+  const values = {};
 
   const built = await buildFilterConditions(params, caller, values);
   if (built === null) return { ids: [], total: 0 };
-  const finalWhere = built.finalCond.length > 0 ? `WHERE ${built.finalCond.join(' AND ')}` : '';
+  const where = built.cond.length > 0 ? `WHERE ${built.cond.join(' AND ')}` : '';
   const rows = await query(
-    `SELECT d.id FROM eqm_mnt d ${built.joinSql} ${finalWhere} ORDER BY d.id`,
+    `SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${built.joinSql} ${where}`,
     values,
   );
-  return { ids: rows.map((r) => String(r.id)), total: rows.length };
+  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const filtered = decorateRows(rows, dueMap, today).filter((ctx) =>
+    passStatusFilter(ctx, params.status) &&
+    passCycleFilter(ctx.row, params.cycle) &&
+    passDueFilter(ctx, params.due, today, tomorrow));
+  filtered.sort((a, b) => compareDeviceOrder(a, b, today));
+  return { ids: filtered.map((ctx) => String(ctx.row.id)), total: filtered.length };
 }
 
 // ==== Tim kiem ====
@@ -486,25 +493,27 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
   const today = businessToday();
   const { sql: mgrInSql, params: mgrParams } = inClause(lCodes, 'x');
   const where = `WHERE d.approver IN (${mgrInSql})`;
-  const values = { ...mgrParams };
 
-  const totalRows = await query(`SELECT COUNT(*) AS total FROM eqm_mnt d ${where}`, values);
-  const total = totalRows[0] ? totalRows[0].total : 0;
-
-  const orderSql =
-    sortBy === 'name'
-      ? 'd.equ_name ASC, d.equ_no ASC'
-      : `${nextDueSql()} ASC, d.equ_name ASC, d.equ_no ASC`;
-  values.offset = (page - 1) * pageSize;
-  values.pageSize = pageSize;
-  values.today = today;
-  const rows = await query(
-    `SELECT ${DEVICE_SELECT} ${DEVICE_FROM} ${where}
-     ORDER BY ${orderSql}
-     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
-    values,
-  );
-  const items = await enrichRecords(rows, today);
+  const rows = await query(`SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${where}`, mgrParams);
+  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const decorated = rows.map((row) => ({ row, due: dueMap.get(row.equ_no) || null }));
+  // 2026-10-23: sap xep trong JS tren han truot chuyen (SQL per-row da bo)
+  decorated.sort((a, b) => {
+    if (sortBy === 'name') {
+      const na = String(a.row.equ_name || '').localeCompare(String(b.row.equ_name || ''));
+      if (na !== 0) return na;
+    } else {
+      const da = a.due || '9999-12-31';
+      const db = b.due || '9999-12-31';
+      if (da !== db) return da < db ? -1 : 1;
+    }
+    if (a.row.equ_no !== b.row.equ_no) return a.row.equ_no < b.row.equ_no ? -1 : 1;
+    return 0;
+  });
+  const total = decorated.length;
+  const offset = (page - 1) * pageSize;
+  const pageRows = decorated.slice(offset, offset + pageSize).map((ctx) => ctx.row);
+  const items = await enrichRecords(pageRows, today, dueMap);
   return { items, total, page, pageSize };
 }
 
@@ -789,6 +798,8 @@ async function approveCompletion(id, userId) {
       { equNo: row.equ_no, reqAt: row.completion_requested_at || null },
     );
   });
+  // max_mt_date doi => lich han truot chuyen het han
+  dueSchedule.invalidateSchedule();
   // Bao nhom duyet con lai + nguoi gui don (fire-and-forget)
   pushService.dispatchApprovalEvent('approved', row, requester.emp_no)
     .catch((err) => console.error('[push]', err.message));
@@ -878,6 +889,8 @@ async function bulkApproveCompletion(ids, userId) {
       );
     }
   });
+  // max_mt_date doi => lich han truot chuyen het han
+  dueSchedule.invalidateSchedule();
   // Bao theo tung thiet bi trong ket qua (fire-and-forget)
   for (const r of rows) {
     pushService.dispatchApprovalEvent('approved', r, requester.emp_no)
@@ -1022,11 +1035,9 @@ async function undoMaintenance(id, userId) {
   if (caller.empNo !== scannerId && !isDeptManager) {
     throw new ApiError(403, 'Only the maintenance staff or department manager can undo');
   }
-  const nextDue = holidayService.shiftPastHolidays(getNextDueDay({
-    startDate: row.use_date,
-    lastMaintenanceDate: row.max_mt_date,
-    maintenanceCycle: row.maintenance_type,
-  }));
+  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong tinh per-row)
+  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const nextDue = dueMap.get(row.equ_no) || null;
   const newStatus = nextDue && nextDue <= today ? 'needs_maintenance' : 'not_due';
   const updated = await query(
     `UPDATE eqm_mnt SET maintenance_status = @status,
