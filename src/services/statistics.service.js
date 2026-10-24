@@ -77,12 +77,18 @@ async function getOverview() {
     if (row.mnt_dept_no) {
       deptDeviceMap.set(row.mnt_dept_no, (deptDeviceMap.get(row.mnt_dept_no) || 0) + 1);
       const diffDays = daysBetween(today, nextDue);
+      // 2026-10-24 user chot: pending_approval qua han = trach nhiem nguoi duyet,
+      // khong hien tren pie han (lat Tre han lan tong tam) de ben bao tri khoi hieu lam
+      const pendingOverdue =
+        row.maintenance_status === 'pending_approval' && diffDays < 0;
       const prev = deptDueMap.get(row.mnt_dept_no) || { today: 0, tomorrow: 0, normal: 0, overdue: 0, total: 0 };
       prev.total += 1;
-      if (diffDays < 0) prev.overdue += 1;
-      else if (diffDays === 0) prev.today += 1;
-      else if (diffDays === 1) prev.tomorrow += 1;
-      else prev.normal += 1;
+      if (!pendingOverdue) {
+        if (diffDays < 0) prev.overdue += 1;
+        else if (diffDays === 0) prev.today += 1;
+        else if (diffDays === 1) prev.tomorrow += 1;
+        else prev.normal += 1;
+      }
       deptDueMap.set(row.mnt_dept_no, prev);
     }
   }
