@@ -543,7 +543,8 @@ async function listMaintainerCandidates(userId) {
     MAINTAINER_POSITIONS.includes(caller.position) ||
     caller.position === 'van_thu';
   if (!allowed) throw new ApiError(403, 'not allowed');
-  let where = 'WHERE position IN (\'nhan_vien_bao_tri\', \'chu_quan\')';
+  let where =
+    'WHERE position IN (\'nhan_vien_bao_tri\', \'chu_quan\', \'van_thu\')';
   const values = {};
   if (caller.position !== 'admin') {
     if (!caller.departmentId) return { items: [] };
@@ -963,7 +964,10 @@ async function transferFactory(id, body, userId) {
   if (body.newMaintainerId) {
     const target = await resolveUser(body.newMaintainerId);
     if (!target) throw new ApiError(404, 'Maintainer not found');
-    if (!MAINTAINER_POSITIONS.includes(target.position)) {
+    if (
+      !MAINTAINER_POSITIONS.includes(target.position) &&
+      target.position !== 'van_thu'
+    ) {
       throw new ApiError(400, 'Invalid maintainer');
     }
     if (caller.position !== 'admin' && target.mnt_dept_no !== caller.departmentId) {
