@@ -25,16 +25,12 @@ const holidayService = require('./holiday.service');
 const {
   businessToday,
   addDays,
-  addDaysClamped,
   hkDateStr,
-  isSunday,
-  shiftPastHolidays,
+  getNextDueDay,
 } = require('../utils/dates');
 
 // Ngày luật hàng đợi hiệu lực: backlog quá hạn trước ngày này xếp hàng lại từ đây
 const QUEUE_RULE_START = '2026-10-27';
-
-const CYCLE_DAYS = { '1_week': 7, '2_weeks': 14, '1_month': 1, '1_year': 12 };
 
 let scheduleCache = null;
 
@@ -48,10 +44,10 @@ async function buildSchedule() {
   // Episode đỏ đang mở (không tính dòng "treo" của thiết bị pending và dòng
   // awaiting_approval): những thiết bị này đang trễ, loại khỏi hàng đợi
   const redRows = await query(
-    `SELECT equ_no, next_due_date,
-            DATEDIFF(day, next_due_date, CAST(@today AS date)) AS days_overdue
-     FROM eqm_mnt_delay
-     WHERE resolved_at IS NULL AND reason <> 'awaiting_approval' AND ${SUSPENDED_EPISODE_SQL}`,
+    `SELECT d.equ_no, d.next_due_date,
+            DATEDIFF(day, d.next_due_date, CAST(@today AS date)) AS days_overdue
+     FROM eqm_mnt_delay d
+     WHERE d.resolved_at IS NULL AND d.reason <> 'awaiting_approval' AND ${SUSPENDED_EPISODE_SQL}`,
     { today },
   );
   const redMap = new Map();
@@ -66,10 +62,14 @@ async function buildSchedule() {
   for (const row of rows) {
     if (row.maintenance_status === 'pending_approval') continue;
     if (redMap.has(row.equ_no)) continue;
-    const days = CYCLE_DAYS[row.maintenance_type] ?? 1;
     const base = row.max_mt_date || row.use_date;
     if (!base) continue;
-    const shifted = shiftPastHolidays(addDaysClamped(hkDateStr(base), days));
+    const rawDue = getNextDueDay({
+      lastMaintenanceDate: row.max_mt_date,
+      startDate: row.use_date,
+      maintenanceType: row.maintenance_type,
+    });
+    const shifted = holidayService.shiftPastHolidays(rawDue);
     const dept = row.mnt_dept_no || '';
     const list = byDept.get(dept) || [];
     list.push({ equNo: row.equ_no, due: shifted });
@@ -81,15 +81,15 @@ async function buildSchedule() {
     list.sort((a, b) =>
       a.due < b.due ? -1 : a.due > b.due ? 1 : a.equNo < b.equNo ? -1 : 1);
     // Neo hàng đợi: ngày bắt đầu = muộn hơn giữa (ngày luật, hạn lô cũ nhất)
-    let cursor = shiftPastHolidays(
+    let cursor = holidayService.shiftPastHolidays(
       list[0].due > QUEUE_RULE_START ? list[0].due : QUEUE_RULE_START,
     );
     for (const item of list) {
       const day = item.due > cursor ? item.due : cursor;
-      const settle = shiftPastHolidays(day);
+      const settle = holidayService.shiftPastHolidays(day);
       dueMap.set(item.equNo, settle);
       let next = addDays(settle, 1);
-      while (isSunday(next) || holidayService.isHoliday(next)) {
+      while (holidayService.isSunday(next) || holidayService.isHoliday(next)) {
         next = addDays(next, 1);
       }
       cursor = next;
