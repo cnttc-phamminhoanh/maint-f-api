@@ -238,7 +238,7 @@ async function enrichRecords(rows, today, dueMap) {
     if (info.empNo) empNos.push(info.empNo);
   }
   const map = await getEmpNameMap(empNos);
-  const effectiveDueMap = dueMap || (await dueSchedule.getEffectiveDueMap());
+  const effectiveDueMap = dueMap || (await dueSchedule.getEffectiveDueMap(true));
   return rows.map((row) => toDeviceRecord(row, map, today, firstApproverMap, factoryNameMap, effectiveDueMap));
 }
 
@@ -397,7 +397,7 @@ async function listDevices(params) {
   );
 
   // 2026-10-27: han theo hang doi bo phan + tap thiet bi do (episode mo)
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const redMap = await dueSchedule.getRedDeviceMap();
   const decorated = decorateRows(rows, dueMap, redMap, today);
 
@@ -463,7 +463,7 @@ async function listDeviceIds(params) {
     `SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${built.joinSql} ${where}`,
     values,
   );
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const redMap = await dueSchedule.getRedDeviceMap();
   const filtered = decorateRows(rows, dueMap, redMap, today).filter((ctx) =>
     passStatusFilter(ctx, params.status) &&
@@ -499,7 +499,7 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
   const where = `WHERE d.approver IN (${mgrInSql})`;
 
   const rows = await query(`SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${where}`, mgrParams);
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const redMap = await dueSchedule.getRedDeviceMap();
   const decorated = rows.map((row) => ({
     row,
@@ -1062,7 +1062,7 @@ async function undoMaintenance(id, userId) {
     throw new ApiError(403, 'Only the maintenance staff or department manager can undo');
   }
   // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong tinh per-row)
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const nextDue = dueMap.get(row.equ_no) || null;
   const newStatus = nextDue && nextDue <= today ? 'needs_maintenance' : 'not_due';
   const updated = await query(

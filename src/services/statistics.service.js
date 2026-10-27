@@ -40,8 +40,8 @@ const CYCLE_LABEL_MAP = {
 
 async function getOverview() {
   const today = businessToday();
-  // 2026-10-27: han theo hang doi bo phan + tap thiet bi do (episode mo)
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  // 2026-10-27 (user chot): lat Hom nay / Ngay mai tinh moi trang thai, ke ca cho duyet
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const redMap = await dueSchedule.getRedDeviceMap();
   const rows = await query(
     'SELECT equ_no, use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no FROM eqm_mnt',
@@ -379,13 +379,6 @@ async function getEquipmentStatistics(params) {
   }
 
   const items = rows.map((row) => {
-    // eslint-disable-next-line no-unused-vars
-    const device = {
-      startDate: row.use_date,
-      lastMaintenanceDate: row.max_mt_date,
-      maintenanceCycle: row.maintenance_type,
-      maintenanceStatus: row.maintenance_status,
-    };
     const nextDue = dueMap.get(row.equ_no) || null;
     const redInfo = redMap.get(row.equ_no) || null;
     const daysOverdue = redInfo

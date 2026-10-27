@@ -70,17 +70,18 @@ async function buildSchedule(today) {
   }
 
   const dueMap = new Map();
+  const allDueMap = new Map();
   for (const row of rows) {
-    if (row.maintenance_status === 'pending_approval') continue;
     const base = row.max_mt_date
       ? hkDateStr(row.max_mt_date)
       : hkDateStr(row.use_date);
     if (!base) continue;
     const due = computeDueFromBase(base, row.maintenance_type);
     if (!due) continue;
-    dueMap.set(row.equ_no, due);
+    allDueMap.set(row.equ_no, due);
+    if (row.maintenance_status !== 'pending_approval') dueMap.set(row.equ_no, due);
   }
-  return { map: dueMap, redMap, today };
+  return { map: dueMap, allMap: allDueMap, redMap, today };
 }
 
 async function getSchedule() {
@@ -102,9 +103,11 @@ async function getSchedule() {
   return scheduleCache;
 }
 
-async function getEffectiveDueMap() {
+// includePending: tab Hom nay / Ngay mai + ngay han tren card phai hien dung
+// moi trang thai (ke ca cho xet duyet); cac thong ke "dang tre" giu ban loai pending
+async function getEffectiveDueMap(includePending = false) {
   const s = await getSchedule();
-  return s.map;
+  return includePending ? s.allMap : s.map;
 }
 
 async function getRedDeviceMap() {
