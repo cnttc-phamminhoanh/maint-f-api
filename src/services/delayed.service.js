@@ -1,6 +1,7 @@
 const { query, withTransaction, txQuery, inClause, inClauseSafe } = require('../db');
 const holidayService = require('./holiday.service');
 const dueSchedule = require('./due-schedule.service');
+const { SUSPENDED_EPISODE_SQL } = require('./delayed.constants');
 const workshopService = require('./workshop.service');
 const { assertAdmin, getCaller } = require('../utils/auth');
 const {
@@ -37,18 +38,6 @@ function reasonForStatus(status) {
   }
 }
 
-// Episode do (nhan vien) cua thiet bi dang cho duyet = "treo": van mo trong DB
-// nhung an khoi moi view cho den khi duyet (dong) hoac tu choi (tiep tuc). 2026-10-09.
-// Episode awaiting_approval (trach nhiem nguoi duyet) thi VAN HIEN THI binh thuong
-// o tat ca view quan tri (BI/admin/lich su) khi qua an han.
-const SUSPENDED_EPISODE_SQL = `NOT (
-  d.resolved_at IS NULL
-  AND d.reason <> 'awaiting_approval'
-  AND EXISTS (
-    SELECT 1 FROM eqm_mnt m
-    WHERE m.equ_no = d.equ_no
-      AND m.maintenance_status = 'pending_approval'))`;
-
 function responsibleForReason(reason, device) {
   if (reason === 'not_started') return device.maintainer_emp_no || null;
   return effectiveMaintainerEmpNo(device);
@@ -72,22 +61,33 @@ async function computeCurrentDelayed() {
   const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const today = businessToday();
-  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  // 2026-10-27: han theo hang doi bo phan — thiet bi trong hang doi chi tre khi
+  // ngay lam viec cua lo da troi qua (settle < today); thiet bi da co episode do
+  // mo thi giu nguyen trong tap «dang tre» (redMap) de runSync cap nhat lien mach
   const dueMap = await dueSchedule.getEffectiveDueMap();
+  const redMap = await dueSchedule.getRedDeviceMap();
   const current = new Map();
   for (const row of rows) {
-    const due = dueMap.get(row.equ_no) || null;
-    if (!due || daysBetween(today, due) >= 0) continue;
     const status = row.maintenance_status || 'not_due';
     const pending = status === 'pending_approval';
+    let due = dueMap.get(row.equ_no) || null;
+    if (!due && !pending) due = redMap.get(row.equ_no)?.due || null;
+    if (!due || daysBetween(today, due) >= 0) continue;
     let awaitingStart = null;
     if (pending) {
       // An han cho duyet: nguoi duyet co them 1 ngay lam viec ke tu ngay muon hon
-      // giua (han, ngay gui xet duyet), nhay qua Chu nhat + ngay le hr_holiday.
+      // giua (han goc truot ngay nghi, ngay gui xet duyet); thiet bi pending nam
+      // ngoai hang doi nen han lay truc tiep per-row.
+      const originalDue = hkDateStr(holidayService.getAdjustedDueDay({
+        startDate: row.use_date,
+        lastMaintenanceDate: row.max_mt_date,
+        maintenanceCycle: row.maintenance_type,
+      }));
       const submitDay = hkDateStr(row.completion_requested_at);
-      const anchor = submitDay && submitDay > due ? submitDay : due;
+      const anchor = submitDay && submitDay > originalDue ? submitDay : originalDue;
       const graceEnd = holidayService.shiftPastHolidays(addDays(anchor, 1));
       if (daysBetween(today, graceEnd) < 0) awaitingStart = addDays(graceEnd, 1);
+      due = originalDue;
     }
     const employeeReason = pending ? null : reasonForStatus(status);
     current.set(row.equ_no, {
@@ -124,6 +124,16 @@ async function computeCurrentDelayed() {
 //   chua co thi mo moi.
 // - thiet bi het tre han: dong moi episode con mo.
 async function runSync() {
+  // Chuyen doi luat hang doi (2026-10-27): dong mot lan cac episode do mo theo
+  // luat cu (occurred_at truoc QUEUE_RULE_START) de thiet bi xep hang lai tu hom
+  // nay thay vi tiep tuc do. Idempotent: cac lan chay sau khong con dong nao khop.
+  await query(
+    `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
+     WHERE resolved_at IS NULL AND reason <> 'awaiting_approval'
+       AND occurred_at < @ruleStart`,
+    { ruleStart: dueSchedule.QUEUE_RULE_START },
+  );
+  dueSchedule.invalidateSchedule();
   const current = await computeCurrentDelayed();
   const openRows = await query(
     'SELECT id, equ_no, reason FROM eqm_mnt_delay WHERE resolved_at IS NULL',
@@ -253,6 +263,8 @@ async function runSync() {
     }
   });
 
+  // refresh cache: episode thay doi -> hang doi thay doi; an han co the tao ban ghi moi
+  dueSchedule.invalidateSchedule();
   return {
     total: empUpdates.length + awUpdates.length + inserts.length,
     syncedAt: new Date().toISOString(),

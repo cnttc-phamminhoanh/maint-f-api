@@ -42,8 +42,9 @@ const CYCLE_LABEL_MAP = {
 
 async function getOverview() {
   const today = businessToday();
-  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  // 2026-10-27: han theo hang doi bo phan + tap thiet bi do (episode mo)
   const dueMap = await dueSchedule.getEffectiveDueMap();
+  const redMap = await dueSchedule.getRedDeviceMap();
   const rows = await query(
     'SELECT equ_no, use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no FROM eqm_mnt',
   );
@@ -84,10 +85,14 @@ async function getOverview() {
       const prev = deptDueMap.get(row.mnt_dept_no) || { today: 0, tomorrow: 0, normal: 0, overdue: 0, total: 0 };
       prev.total += 1;
       if (!pendingOverdue) {
-        if (diffDays < 0) prev.overdue += 1;
-        else if (diffDays === 0) prev.today += 1;
-        else if (diffDays === 1) prev.tomorrow += 1;
-        else prev.normal += 1;
+        if (redMap.has(row.equ_no)) {
+          prev.overdue += 1;
+        } else if (nextDue) {
+          if (diffDays < 0) prev.overdue += 1;
+          else if (diffDays === 0) prev.today += 1;
+          else if (diffDays === 1) prev.tomorrow += 1;
+          else prev.normal += 1;
+        }
       }
       deptDueMap.set(row.mnt_dept_no, prev);
     }
@@ -224,8 +229,9 @@ async function getDelayedStatistics(reason, page, pageSize) {
 
 async function getEquipmentStatistics(params) {
   const today = businessToday();
-  // 2026-10-23: han truot chuyen tra tu lich toan cuc (khong con tinh per-row)
+  // 2026-10-27: han theo hang doi bo phan + tap thiet bi do (episode mo)
   const dueMap = await dueSchedule.getEffectiveDueMap();
+  const redMap = await dueSchedule.getRedDeviceMap();
   const conditions = [];
   const values = {};
   if (params.factory) {
@@ -287,10 +293,12 @@ async function getEquipmentStatistics(params) {
     const statusMatched = [];
     for (const row of baseRows) {
       const nextDue = dueMap.get(row.equ_no) || null;
+      const red = redMap.has(row.equ_no);
       if (DUE_FILTERS.includes(params.due)) {
         const diffDays = daysBetween(today, nextDue);
-        const category =
-          diffDays < 0
+        const category = red
+          ? 'overdue'
+          : diffDays < 0
             ? 'overdue'
             : diffDays === 0
               ? 'today'
@@ -306,7 +314,7 @@ async function getEquipmentStatistics(params) {
           row.maintenance_status === 'rejected';
         const eff = rawActive
           ? row.maintenance_status
-          : nextDue && nextDue <= today
+          : red || (nextDue && nextDue <= today)
             ? 'needs_maintenance'
             : 'not_due';
         if (eff === params.maintenanceStatus) statusMatched.push(row.id);
@@ -381,7 +389,10 @@ async function getEquipmentStatistics(params) {
       maintenanceStatus: row.maintenance_status,
     };
     const nextDue = dueMap.get(row.equ_no) || null;
-    const daysOverdue = Math.max(0, -daysBetween(today, nextDue));
+    const redInfo = redMap.get(row.equ_no) || null;
+    const daysOverdue = redInfo
+      ? redInfo.daysOverdue
+      : Math.max(0, nextDue ? -daysBetween(today, nextDue) : 0);
     const resp = row.approver_emp_no
       ? firstApproverMap.get(row.approver_emp_no) || null
       : null;

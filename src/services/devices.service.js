@@ -70,9 +70,11 @@ function touchSuffix() {
 // ==== Han truot chuyen (2026-10-23) ====
 // Han sau truot cua tung thiet bi tra tu lich toan cuc (due-schedule.service);
 // loc trang thai / chu ky / thoi han, dem va sap xep lam trong JS.
-function decorateRows(rows, dueMap, today) {
+function decorateRows(rows, dueMap, redMap, today) {
   return rows.map((row) => {
     const due = dueMap.get(row.equ_no) || null;
+    // 2026-10-27: thiet bi con episode do mo = dang tre han (nam ngoai hang doi)
+    const red = redMap.has(row.equ_no);
     const status = effectiveStatus(
       {
         maintenanceStatus: row.maintenance_status,
@@ -83,7 +85,7 @@ function decorateRows(rows, dueMap, today) {
       today,
       due,
     );
-    return { row, due, status };
+    return { row, due, red, status };
   });
 }
 
@@ -101,9 +103,8 @@ function passCycleFilter(row, cycleFilter) {
 
 function passDueFilter(ctx, dueFilter, today, tomorrow) {
   if (!dueFilter || dueFilter === 'all') return true;
+  if (dueFilter === 'overdue') return ctx.red;
   if (!ctx.due) return false;
-  // pending khong hien o tab Tre han ben bao tri (BI/admin van dem khi qua an han)
-  if (dueFilter === 'overdue') return ctx.due < today && ctx.status !== 'pending_approval';
   if (dueFilter === 'today') return ctx.due === today;
   if (dueFilter === 'tomorrow') return ctx.due === tomorrow;
   return ctx.due > tomorrow; // later
@@ -113,7 +114,7 @@ function statusPriority(ctx, today) {
   if (ctx.status === 'in_maintenance') return 1;
   if (ctx.status === 'pending_approval') return 2;
   if (ctx.status === 'rejected') return 3;
-  if (ctx.due && ctx.due <= today) return 4;
+  if (ctx.red || (ctx.due && ctx.due <= today)) return 4;
   return 5;
 }
 
@@ -395,9 +396,10 @@ async function listDevices(params) {
     values,
   );
 
-  // 2026-10-23: han truot chuyen tinh san toan cuc; loc / dem / sap xep lam trong JS
+  // 2026-10-27: han theo hang doi bo phan + tap thiet bi do (episode mo)
   const dueMap = await dueSchedule.getEffectiveDueMap();
-  const decorated = decorateRows(rows, dueMap, today);
+  const redMap = await dueSchedule.getRedDeviceMap();
+  const decorated = decorateRows(rows, dueMap, redMap, today);
 
   // dem theo thoi han + trang thai + chu ky (tinh tren dieu kien goc, chua loc status/due/cycle)
   const dueCounts = { all: decorated.length, overdue: 0, today: 0, tomorrow: 0, later: 0 };
@@ -411,9 +413,10 @@ async function listDevices(params) {
   };
   const cycleCounts = { all: decorated.length, '1_week': 0, '2_weeks': 0, '1_month': 0, '1_year': 0 };
   for (const ctx of decorated) {
-    if (ctx.due) {
-      if (ctx.due < today && ctx.status !== 'pending_approval') dueCounts.overdue += 1;
-      else if (ctx.due === today) dueCounts.today += 1;
+    if (ctx.red) {
+      dueCounts.overdue += 1;
+    } else if (ctx.due) {
+      if (ctx.due === today) dueCounts.today += 1;
       else if (ctx.due === tomorrow) dueCounts.tomorrow += 1;
       else if (ctx.due > tomorrow) dueCounts.later += 1;
     }
@@ -461,7 +464,8 @@ async function listDeviceIds(params) {
     values,
   );
   const dueMap = await dueSchedule.getEffectiveDueMap();
-  const filtered = decorateRows(rows, dueMap, today).filter((ctx) =>
+  const redMap = await dueSchedule.getRedDeviceMap();
+  const filtered = decorateRows(rows, dueMap, redMap, today).filter((ctx) =>
     passStatusFilter(ctx, params.status) &&
     passCycleFilter(ctx.row, params.cycle) &&
     passDueFilter(ctx, params.due, today, tomorrow));
@@ -496,7 +500,12 @@ async function listManagedDevices(userId, sortBy, page, pageSize) {
 
   const rows = await query(`SELECT ${deviceSelectSql()} ${DEVICE_FROM} ${where}`, mgrParams);
   const dueMap = await dueSchedule.getEffectiveDueMap();
-  const decorated = rows.map((row) => ({ row, due: dueMap.get(row.equ_no) || null }));
+  const redMap = await dueSchedule.getRedDeviceMap();
+  const decorated = rows.map((row) => ({
+    row,
+    due: dueMap.get(row.equ_no) || null,
+    red: redMap.has(row.equ_no),
+  }));
   // 2026-10-23: sap xep trong JS tren han truot chuyen (SQL per-row da bo)
   decorated.sort((a, b) => {
     if (sortBy === 'name') {
@@ -956,9 +965,15 @@ async function transferFactory(id, body, userId) {
   if (caller.position !== 'admin' && row.mnt_dept_no !== caller.departmentId) {
     throw new ApiError(403, 'Device belongs to another department');
   }
-  // 2026-10-17: dich chuyen theo l_code (eqm_bas_user); ghi l_code vao approver
-  const hasGroup = await workshopService.lCodeExists(body.targetFactory);
-  if (!hasGroup) throw new ApiError(400, 'Factory not found');
+  // 2026-10-24 user chot: doi 1 trong 2 (phan xuong / nguoi phu trach) hoac ca hai
+  const targetFactory = body.targetFactory || null;
+  if (!targetFactory && !body.newMaintainerId) {
+    throw new ApiError(400, 'Nothing to change');
+  }
+  if (targetFactory) {
+    const hasGroup = await workshopService.lCodeExists(targetFactory);
+    if (!hasGroup) throw new ApiError(400, 'Factory not found');
+  }
 
   let maintainerTarget = null;
   if (body.newMaintainerId) {
@@ -977,8 +992,12 @@ async function transferFactory(id, body, userId) {
   }
 
   // 2026-10-17: equ_addr da bi user xoa; ma xuong ghi vao approver + location
-  const set = ['approver = @factory', 'location = @factory'];
-  const values = { factory: body.targetFactory, id, equNo: row.equ_no };
+  const set = [];
+  const values = { id, equNo: row.equ_no };
+  if (targetFactory) {
+    set.push('approver = @factory', 'location = @factory');
+    values.factory = targetFactory;
+  }
   if (maintainerTarget) {
     set.push(
       'maintainer_emp_no = @newMaintainer',
@@ -992,8 +1011,11 @@ async function transferFactory(id, body, userId) {
   // eqm_bas: chi dung 2 cot def04 (= location) va emp_no (= nguoi phu trach)
   const basEmpNo = maintainerTarget
     ? maintainerTarget.empNo
-    : row.maintainer_emp_no;
-  const basSet = ['def04 = @factory'];
+    : targetFactory
+      ? row.maintainer_emp_no
+      : null;
+  const basSet = [];
+  if (targetFactory) basSet.push('def04 = @factory');
   if (basEmpNo) basSet.push('emp_no = @basEmp');
   values.basEmp = basEmpNo;
 
