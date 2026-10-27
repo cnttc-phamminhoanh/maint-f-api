@@ -101,7 +101,7 @@ async function buildSchedule() {
 function cacheValid() {
   if (!scheduleCache) return false;
   if (scheduleCache.today !== businessToday()) return false;
-  if (scheduleCache.calendarVersion !== holidayService.calendarVersion()) return false;
+  if (scheduleCache.calendarVersion !== holidayService.getCalendarVersion()) return false;
   if (Date.now() - scheduleCache.builtAt > 60_000) return false;
   return true;
 }
@@ -110,7 +110,7 @@ async function getSchedule() {
   if (cacheValid()) return scheduleCache;
   scheduleCache = {
     ...(await buildSchedule()),
-    calendarVersion: holidayService.calendarVersion(),
+    calendarVersion: holidayService.getCalendarVersion(),
     builtAt: Date.now(),
   };
   return scheduleCache;
