@@ -38,8 +38,29 @@ function shiftPastHolidays(dateStr) {
   return d;
 }
 
+// 2026-10-27 user chốt: MỌI chu kỳ (tuần/tháng/năm) đều cộng bù ngày nghỉ rơi
+// TRONG khoảng kỳ — mỗi Chủ nhật / ngày hr_holiday gặp được dời hạn thêm 1 ngày;
+// khoảng kỳ dài ra thì ngày nghỉ mới lại tiếp tục được tính, hạn cuối luôn là
+// ngày làm việc. Vd 26/09 + 1 tháng = 26/10, 5 CN (27/09, 04/10, 11/10, 18/10,
+// 25/10) → 31/10.
+function shiftDueByRestDaysInPeriod(base, rawDue) {
+  if (!base || !rawDue) return rawDue;
+  let due = rawDue;
+  let cursor = addDays(base, 1);
+  let guard = 0;
+  while (cursor <= due && guard < 800) {
+    if (isSunday(cursor) || holidaySet.has(cursor)) due = addDays(due, 1);
+    cursor = addDays(cursor, 1);
+    guard += 1;
+  }
+  return due;
+}
+
 function getAdjustedDueDay(device) {
-  return shiftPastHolidays(getNextDueDay(device));
+  const rawDue = getNextDueDay(device);
+  if (!rawDue) return rawDue;
+  const base = fmtDate(device.lastMaintenanceDate) || fmtDate(device.startDate);
+  return shiftDueByRestDaysInPeriod(base, rawDue);
 }
 
 function isHoliday(dateStr) {
@@ -170,6 +191,7 @@ module.exports = {
   isHoliday,
   getCalendarVersion,
   shiftPastHolidays,
+  shiftDueByRestDaysInPeriod,
   getAdjustedDueDay,
   listHolidays,
   createHolidays,

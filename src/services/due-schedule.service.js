@@ -1,12 +1,12 @@
 /**
  * Tính hạn bảo dưỡng theo TỪNG THIẾT BỊ (2026-10-27 user chốt lại, BỎ hàng đợi
  * theo bộ phận cùng ngày): đúng thiết bị đúng ngày, không xếp lô/hàng đợi.
- * - Chu kỳ tuần (1_week / 2_weeks / 2_week): cộng đủ 7/14 ngày lịch rồi dời
- *   hạn thêm 1 ngày cho mỗi ngày Chủ nhật / hr_holiday rơi TRONG khoảng kỳ
- *   (vd bảo dưỡng 14/10 + 2 tuần = 28/10, có 2 CN 18/10 + 25/10 → hạn 30/10;
- *   lễ rơi giữa chừng lùi thêm). Ngày hạn cuối cùng luôn là ngày làm việc.
- * - Chu kỳ tháng/năm: ngày gốc + 1/12 tháng kẹp ngày cuối tháng; rơi ngày
- *   nghỉ thì trượt sang ngày làm việc kế.
+ * - MỌI chu kỳ (tuần/tháng/năm): hạn gốc = ngày gốc + chu kỳ (tuần = 7/14 ngày
+ *   lịch; tháng/năm = +1/12 tháng kẹp ngày cuối tháng), sau đó dời hạn thêm 1
+ *   ngày cho mỗi Chủ nhật / hr_holiday rơi TRONG khoảng kỳ (ngày nghỉ mới phát
+ *   sinh khi khoảng kỳ dài ra cũng được tính) — ngày hạn cuối luôn là ngày làm
+ *   việc. Vd 14/10 + 2 tuần = 28/10, 2 CN 18/10 + 25/10 → 30/10;
+ *   26/09 + 1 tháng = 26/10, 5 CN → 31/10.
  * Thiết bị ĐỎ = còn episode đỏ mở (redMap từ eqm_mnt_delay) — consumers đọc
  * redMap để giữ trạng thái/số ngày trễ liên mạch; pending_approval nằm ngoài
  * dueMap (ân hạn duyệt tính per-row trong computeCurrentDelayed).
@@ -24,37 +24,26 @@ const {
 
 const TTL_MS = 60 * 1000;
 
-// số ngày lịch của chu kỳ tuần (CN + lễ trong kỳ được cộng bù vào hạn)
+// số ngày lịch của chu kỳ tuần (tháng/năm đi qua getNextDueDay)
 const WEEK_CYCLE_CALENDAR_DAYS = { '1_week': 7, '2_weeks': 14, '2_week': 14 };
 
-function isWorkingDay(dateStr) {
-  return !holidayService.isSunday(dateStr) && !holidayService.isHoliday(dateStr);
-}
-
-// cộng đủ số ngày lịch, rồi mỗi ngày nghỉ (CN/lễ) rơi trong khoảng kỳ dời hạn
-// thêm 1 ngày — khoảng kỳ dài ra thì ngày nghỉ mới lại tiếp tục được tính
-function addWeekCycleDays(base, calendarDays) {
-  let due = addDays(base, calendarDays);
-  let cursor = addDays(base, 1);
-  while (cursor <= due) {
-    if (!isWorkingDay(cursor)) due = addDays(due, 1);
-    cursor = addDays(cursor, 1);
-  }
-  return due;
-}
-
-// Hạn theo (ngày gốc, chu kỳ) — nguồn duy nhất cho mọi nơi cần tính hạn đơn lẻ:
-// tuần = +7/14 ngày lịch bù ngày nghỉ trong kỳ; tháng/năm = +tháng kẹp cuối tháng + dời ngày nghỉ
-function computeDueFromBase(base, cycle) {
-  if (!base) return null;
+// hạn gốc (chưa bù ngày nghỉ) theo (ngày gốc, chu kỳ)
+function rawDueFromBase(base, cycle) {
   const calendarDays = WEEK_CYCLE_CALENDAR_DAYS[cycle];
-  if (calendarDays) return addWeekCycleDays(base, calendarDays);
-  const rawDue = getNextDueDay({
+  if (calendarDays) return addDays(base, calendarDays);
+  return getNextDueDay({
     lastMaintenanceDate: base,
     startDate: base,
     maintenanceType: cycle,
   });
-  return rawDue ? holidayService.shiftPastHolidays(rawDue) : null;
+}
+
+// Hạn theo (ngày gốc, chu kỳ) — nguồn duy nhất: hạn gốc + cộng bù mọi ngày nghỉ
+// rơi trong khoảng kỳ (tuần/tháng/năm dùng chung một luật)
+function computeDueFromBase(base, cycle) {
+  if (!base) return null;
+  const rawDue = rawDueFromBase(base, cycle);
+  return rawDue ? holidayService.shiftDueByRestDaysInPeriod(base, rawDue) : null;
 }
 
 let scheduleCache = null;
@@ -83,22 +72,13 @@ async function buildSchedule(today) {
   const dueMap = new Map();
   for (const row of rows) {
     if (row.maintenance_status === 'pending_approval') continue;
-    const calendarDays = WEEK_CYCLE_CALENDAR_DAYS[row.maintenance_type];
-    if (calendarDays) {
-      const base = row.max_mt_date
-        ? hkDateStr(row.max_mt_date)
-        : hkDateStr(row.use_date);
-      if (!base) continue;
-      dueMap.set(row.equ_no, addWeekCycleDays(base, calendarDays));
-      continue;
-    }
-    const rawDue = getNextDueDay({
-      lastMaintenanceDate: row.max_mt_date,
-      startDate: row.use_date,
-      maintenanceType: row.maintenance_type,
-    });
-    if (!rawDue) continue;
-    dueMap.set(row.equ_no, holidayService.shiftPastHolidays(rawDue));
+    const base = row.max_mt_date
+      ? hkDateStr(row.max_mt_date)
+      : hkDateStr(row.use_date);
+    if (!base) continue;
+    const due = computeDueFromBase(base, row.maintenance_type);
+    if (!due) continue;
+    dueMap.set(row.equ_no, due);
   }
   return { map: dueMap, redMap, today };
 }
