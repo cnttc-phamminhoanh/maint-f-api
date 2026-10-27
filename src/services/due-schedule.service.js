@@ -1,48 +1,70 @@
 /**
- * Hàng đợi hạn bảo dưỡng theo bộ phận (chốt 2026-10-27, thay cascade 23/10):
- * - Mỗi bộ phận (mnt_dept_no) có một hàng đợi việc, mỗi ngày làm việc một lô:
- *   lô có hạn gốc cũ nhất chưa bảo dưỡng = việc «Hôm nay»; các lô sau xếp lần
- *   lượt vào các ngày làm việc kế tiếp (nghỉ = Chủ nhật + hr_holiday, thứ 7
- *   vẫn làm). Hạn gốc trong tương lai giữ nguyên vị trí (không bị kéo sớm
- *   hơn chính nó; nếu ngày đó là ngày nghỉ thì trượt sang ngày làm việc kế).
- * - Hàng đợi neo từ QUEUE_RULE_START: backlog quá hạn trước ngày luật mới hiệu
- *   lực xếp hàng lại từ đầu (lô cũ nhất = QUEUE_RULE_START) nên KHÔNG bị tính
- *   trễ ngay — chỉ khi ngày làm việc của lô trôi qua mà vẫn chưa bảo dưỡng thì
- *   cron runSync mới mở episode đỏ (ngày hôm sau settle < today).
- * - Thiết bị ĐỎ = còn episode đỏ mở (lưu trong redMap, loại khỏi hàng đợi);
- *   thiết bị pending_approval không nằm trong hàng đợi lẫn redMap (luật ân hạn
- *   awaiting riêng). Bảo dưỡng xong / duyệt xong episode đóng -> thiết bị quay
- *   lại hàng đợi với hạn gốc mới, tự xếp lại từ hôm nay.
- * - Hạn hiển thị của lô đang xếp hàng = ngày làm việc được xếp (có thể LỚN hơn
- *   hạn gốc — đó là bản chất giãn backlog). FE/API đọc settle date, không tự tính.
- * Cache: TTL 60s + calendarVersion + invalidateSchedule() khi episode/duyệt thay đổi.
+ * Tính hạn bảo dưỡng theo TỪNG THIẾT BỊ (2026-10-27 user chốt lại, BỎ hàng đợi
+ * theo bộ phận cùng ngày): đúng thiết bị đúng ngày, không xếp lô/hàng đợi.
+ * - Chu kỳ tuần (1_week / 2_weeks / 2_week): cộng đủ 7/14 ngày lịch rồi dời
+ *   hạn thêm 1 ngày cho mỗi ngày Chủ nhật / hr_holiday rơi TRONG khoảng kỳ
+ *   (vd bảo dưỡng 14/10 + 2 tuần = 28/10, có 2 CN 18/10 + 25/10 → hạn 30/10;
+ *   lễ rơi giữa chừng lùi thêm). Ngày hạn cuối cùng luôn là ngày làm việc.
+ * - Chu kỳ tháng/năm: ngày gốc + 1/12 tháng kẹp ngày cuối tháng; rơi ngày
+ *   nghỉ thì trượt sang ngày làm việc kế.
+ * Thiết bị ĐỎ = còn episode đỏ mở (redMap từ eqm_mnt_delay) — consumers đọc
+ * redMap để giữ trạng thái/số ngày trễ liên mạch; pending_approval nằm ngoài
+ * dueMap (ân hạn duyệt tính per-row trong computeCurrentDelayed).
+ * Cache: TTL 60s + calendarVersion + invalidateSchedule() khi episode/duyệt đổi.
  */
 const { query } = require('../db');
-// eslint-disable-next-line no-unused-vars
-const config = require('../config');
 const { SUSPENDED_EPISODE_SQL } = require('./delayed.constants');
 const holidayService = require('./holiday.service');
 const {
-  businessToday,
   addDays,
+  businessToday,
   hkDateStr,
   getNextDueDay,
 } = require('../utils/dates');
 
-// Ngày luật hàng đợi hiệu lực: backlog quá hạn trước ngày này xếp hàng lại từ đây
-const QUEUE_RULE_START = '2026-10-27';
+const TTL_MS = 60 * 1000;
+
+// số ngày lịch của chu kỳ tuần (CN + lễ trong kỳ được cộng bù vào hạn)
+const WEEK_CYCLE_CALENDAR_DAYS = { '1_week': 7, '2_weeks': 14, '2_week': 14 };
+
+function isWorkingDay(dateStr) {
+  return !holidayService.isSunday(dateStr) && !holidayService.isHoliday(dateStr);
+}
+
+// cộng đủ số ngày lịch, rồi mỗi ngày nghỉ (CN/lễ) rơi trong khoảng kỳ dời hạn
+// thêm 1 ngày — khoảng kỳ dài ra thì ngày nghỉ mới lại tiếp tục được tính
+function addWeekCycleDays(base, calendarDays) {
+  let due = addDays(base, calendarDays);
+  let cursor = addDays(base, 1);
+  while (cursor <= due) {
+    if (!isWorkingDay(cursor)) due = addDays(due, 1);
+    cursor = addDays(cursor, 1);
+  }
+  return due;
+}
+
+// Hạn theo (ngày gốc, chu kỳ) — nguồn duy nhất cho mọi nơi cần tính hạn đơn lẻ:
+// tuần = +7/14 ngày lịch bù ngày nghỉ trong kỳ; tháng/năm = +tháng kẹp cuối tháng + dời ngày nghỉ
+function computeDueFromBase(base, cycle) {
+  if (!base) return null;
+  const calendarDays = WEEK_CYCLE_CALENDAR_DAYS[cycle];
+  if (calendarDays) return addWeekCycleDays(base, calendarDays);
+  const rawDue = getNextDueDay({
+    lastMaintenanceDate: base,
+    startDate: base,
+    maintenanceType: cycle,
+  });
+  return rawDue ? holidayService.shiftPastHolidays(rawDue) : null;
+}
 
 let scheduleCache = null;
 
-async function buildSchedule() {
-  const today = businessToday();
+async function buildSchedule(today) {
   await holidayService.ensureHolidaysLoaded();
   const rows = await query(
-    `SELECT equ_no, use_date, max_mt_date, maintenance_type, maintenance_status, mnt_dept_no
+    `SELECT equ_no, use_date, max_mt_date, maintenance_type, maintenance_status
      FROM eqm_mnt`,
   );
-  // Episode đỏ đang mở (không tính dòng "treo" của thiết bị pending và dòng
-  // awaiting_approval): những thiết bị này đang trễ, loại khỏi hàng đợi
   const redRows = await query(
     `SELECT d.equ_no, d.next_due_date,
             DATEDIFF(day, d.next_due_date, CAST(@today AS date)) AS days_overdue
@@ -58,72 +80,56 @@ async function buildSchedule() {
     });
   }
 
-  const byDept = new Map();
+  const dueMap = new Map();
   for (const row of rows) {
     if (row.maintenance_status === 'pending_approval') continue;
-    if (redMap.has(row.equ_no)) continue;
-    const base = row.max_mt_date || row.use_date;
-    if (!base) continue;
+    const calendarDays = WEEK_CYCLE_CALENDAR_DAYS[row.maintenance_type];
+    if (calendarDays) {
+      const base = row.max_mt_date
+        ? hkDateStr(row.max_mt_date)
+        : hkDateStr(row.use_date);
+      if (!base) continue;
+      dueMap.set(row.equ_no, addWeekCycleDays(base, calendarDays));
+      continue;
+    }
     const rawDue = getNextDueDay({
       lastMaintenanceDate: row.max_mt_date,
       startDate: row.use_date,
       maintenanceType: row.maintenance_type,
     });
-    const shifted = holidayService.shiftPastHolidays(rawDue);
-    const dept = row.mnt_dept_no || '';
-    const list = byDept.get(dept) || [];
-    list.push({ equNo: row.equ_no, due: shifted });
-    byDept.set(dept, list);
-  }
-
-  const dueMap = new Map();
-  for (const list of byDept.values()) {
-    list.sort((a, b) =>
-      a.due < b.due ? -1 : a.due > b.due ? 1 : a.equNo < b.equNo ? -1 : 1);
-    // Neo hàng đợi: ngày bắt đầu = muộn hơn giữa (ngày luật, hạn lô cũ nhất)
-    let cursor = holidayService.shiftPastHolidays(
-      list[0].due > QUEUE_RULE_START ? list[0].due : QUEUE_RULE_START,
-    );
-    for (const item of list) {
-      const day = item.due > cursor ? item.due : cursor;
-      const settle = holidayService.shiftPastHolidays(day);
-      dueMap.set(item.equNo, settle);
-      let next = addDays(settle, 1);
-      while (holidayService.isSunday(next) || holidayService.isHoliday(next)) {
-        next = addDays(next, 1);
-      }
-      cursor = next;
-    }
+    if (!rawDue) continue;
+    dueMap.set(row.equ_no, holidayService.shiftPastHolidays(rawDue));
   }
   return { map: dueMap, redMap, today };
 }
 
-function cacheValid() {
-  if (!scheduleCache) return false;
-  if (scheduleCache.today !== businessToday()) return false;
-  if (scheduleCache.calendarVersion !== holidayService.getCalendarVersion()) return false;
-  if (Date.now() - scheduleCache.builtAt > 60_000) return false;
-  return true;
-}
-
 async function getSchedule() {
-  if (cacheValid()) return scheduleCache;
+  const today = businessToday();
+  if (
+    scheduleCache &&
+    scheduleCache.today === today &&
+    scheduleCache.calendarVersion === holidayService.getCalendarVersion() &&
+    Date.now() - scheduleCache.builtAt < TTL_MS
+  ) {
+    return scheduleCache;
+  }
+  const built = await buildSchedule(today);
   scheduleCache = {
-    ...(await buildSchedule()),
-    calendarVersion: holidayService.getCalendarVersion(),
+    ...built,
     builtAt: Date.now(),
+    calendarVersion: holidayService.getCalendarVersion(),
   };
   return scheduleCache;
 }
 
-// Hạn trượt của thiết bị trong hàng đợi; thiết bị đỏ / pending -> undefined
 async function getEffectiveDueMap() {
-  return (await getSchedule()).map;
+  const s = await getSchedule();
+  return s.map;
 }
 
-// equ_no -> { due, daysOverdue } của các thiết bị đang trễ (episode đỏ mở)
 async function getRedDeviceMap() {
-  return (await getSchedule()).redMap;
+  const s = await getSchedule();
+  return s.redMap;
 }
 
 function invalidateSchedule() {
@@ -131,8 +137,8 @@ function invalidateSchedule() {
 }
 
 module.exports = {
-  QUEUE_RULE_START,
   getEffectiveDueMap,
   getRedDeviceMap,
   invalidateSchedule,
+  computeDueFromBase,
 };

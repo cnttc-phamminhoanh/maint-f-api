@@ -12,9 +12,7 @@ const {
   daysBetween,
   addDays,
   effectiveStatus,
-  addMonthsClamped,
   fmtDate,
-  CYCLE_MONTHS,
 } = require('../utils/dates');
 const dueSchedule = require('./due-schedule.service');
 
@@ -502,7 +500,7 @@ async function listCompletedToday(factory, page, pageSize) {
     const active = r.temp_maintainer_emp_no || maintainer;
     const resp = r.approver_emp_no ? firstApproverMap.get(r.approver_emp_no) || null : null;
     const nextDue = r.max_mt_date
-      ? addMonthsClamped(fmtDate(r.max_mt_date), CYCLE_MONTHS[r.maintenance_type] || 1)
+      ? dueSchedule.computeDueFromBase(fmtDate(r.max_mt_date), r.maintenance_type)
       : null;
     const todayD = new Date(`${today}T00:00:00+07:00`);
     const daysOverdue = nextDue
