@@ -1018,7 +1018,11 @@ async function autoApproveStaleRequests(userId) {
   for (const row of rows) {
     try {
       // check_user cua phieu = approver dau nhom l_code (nguoi de qua han)
-      const approverEmpNo = firstApproverMap.get(row.approver_emp_no) || '';
+      // getFirstApproverMap tra ve OBJECT {empNo,empName,position} — phai lay .empNo
+      // (2026-11-16 fix: truoc day truyen ca object vao finalizePendingOrder nen
+      //  `(approverEmpNo || '').slice is not a function` → khong may nao tu duyet duoc)
+      const approverInfo = firstApproverMap.get(row.approver_emp_no);
+      const approverEmpNo = approverInfo ? approverInfo.empNo || '' : '';
       // max_mt_date = ngay gui xet duyet (khong phai ngay tu duyet)
       const baseDate = businessDateOf(row.completion_requested_at) || today;
       await withTransaction(async (tx) => {
